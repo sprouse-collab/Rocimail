@@ -9,7 +9,8 @@ normal JMAP account: server-side full-text search (including attachments) over t
 entire archive, storage on the NAS where space is cheap, and zero archive-specific
 code in the app.
 
-This is a planning runbook; exact commands get pinned down when M2 executes.
+This is a planning runbook; exact commands get pinned down when M5 (secondary
+accounts — deliberately the last milestone, non-blocking for v1.0) executes.
 
 ## 1. Stalwart in Container Station
 

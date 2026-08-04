@@ -18,6 +18,10 @@ your default mail app on iOS.
   **archive** of old company accounts (domains since sold, no new mail ever) on a
   second Stalwart instance running on the user's QNAP NAS, reached over Tailscale.
   To the app the archive is just another JMAP account.
+- **Live account first.** The full feature set (mail, calendar, search, encryption)
+  is built and polished against the primary VPS JMAP account before any secondary
+  account work begins. The gateway and archive tier are a late milestone (§11, M5)
+  that does not block the v1.0 launch.
 
 ---
 
@@ -384,15 +388,21 @@ iOS kills background sockets, so "instant mail" requires APNs:
 | --- | --- | --- |
 | **M0 — Foundations** (3–4 wk) | Xcode project + Swift Package layout, GRDB schema, JMAP client (session discovery, Mailbox/Email get+query+changes), design system, account setup w/ autodiscovery | Read mail from a Stalwart account on an iPhone; offline cache works |
 | **M1 — Daily-drivable mail (JMAP)** (6–8 wk) | Threading, reader w/ sanitized HTML, composer + send + drafts, flags/move/delete, unified inbox, local FTS (bodies), APNs push gateway on the Rocimail server | You dogfood your JMAP account as your primary mail app |
-| **M2 — Gateway + archive tier** (3–4 wk) | **Server side, no Mac needed**: JMAP façade on the Rocimail Node server over the existing `imap.ts` provider (state mapping, IDLE, APNs relay for IMAP), Gmail/Outlook.com OAuth token handling; QNAP Stalwart deployment + one-time EML/Maildir import (see `ARCHIVE_TIER.md`); Tailscale setup; default-mail-app registration in the app | A Gmail-via-gateway account and the QNAP archive both work end-to-end in the app; archive search finds old-company mail incl. attachments |
-| **M3 — Calendar** (6–8 wk) | JMAP Calendars + CalDAV sync, all views, event CRUD + recurrence, iMIP invite cards in mail, reminders, widgets | Invites round-trip with Google/Fastmail/Outlook users |
-| **M4 — Search everywhere** (4–5 wk) | **JMAP**: attachment extraction pipeline + OCR opt-in, query syntax + filter chips, `Email/query` server-search merge, Spotlight integration. **IMAP**: header/body local search + server `SEARCH` fallback only (attachment indexing optional, non-blocking) | "Find that PDF from March" works offline on a JMAP account; IMAP search covers headers/bodies of synced mail |
-| **M5 — Encryption & power features** (6–8 wk) | OpenPGP + Autocrypt, S/MIME, app lock, snooze/send-later/undo-send, rules engine + Sieve management, templates, vacation responder | Feature parity checklist vs Zoho/Outlook signed off |
-| **v1.0 App Store launch** | Onboarding, accessibility audit (VoiceOver, Dynamic Type), localization (en + 5), perf budget (cold start < 1.5 s, 60 fps lists), App Store review | Approved, crash-free > 99.5 % |
+| **M2 — Calendar** (6–8 wk) | JMAP Calendars + CalDAV sync, all views, event CRUD + recurrence, iMIP invite cards in mail, reminders, widgets, default-mail-app registration | Invites round-trip with Google/Fastmail/Outlook users |
+| **M3 — Search everywhere** (4–5 wk) | Attachment extraction pipeline + OCR opt-in, query syntax + filter chips, `Email/query` server-search merge, Spotlight integration — all against the live JMAP account | "Find that PDF from March" works offline |
+| **M4 — Encryption & power features** (6–8 wk) | OpenPGP + Autocrypt, S/MIME, app lock, snooze/send-later/undo-send, rules engine + Sieve management, templates, vacation responder | Feature parity checklist vs Zoho/Outlook signed off — the live account is a complete daily driver |
+| **M5 — Secondary accounts** (3–4 wk, **does not block v1.0**) | **Mostly server-side, no Mac needed**: JMAP façade on the Rocimail Node server over the existing `imap.ts` provider (state mapping, IDLE, APNs relay), Gmail/Outlook.com OAuth token handling; QNAP Stalwart deployment + one-time EML/Maildir import (see `ARCHIVE_TIER.md`); Tailscale setup; read-only account UX + lighter IMAP search tier (§6) in the app | A Gmail-via-gateway account and the QNAP archive both work end-to-end; archive search finds old-company mail incl. attachments |
+| **v1.0 App Store launch** | Onboarding, accessibility audit (VoiceOver, Dynamic Type), localization (en + 5), perf budget (cold start < 1.5 s, 60 fps lists), App Store review. Ships after M4; M5 lands before or in a 1.x update, whichever the schedule favors | Approved, crash-free > 99.5 % |
 
 Post-v1 backlog: **Android (§14)**, iPad split-view layout, CardDAV contacts,
 shared/delegated calendars & mailboxes, tasks (JMAP Tasks/CalDAV VTODO), Apple Watch
 app, message translation, desktop exploration.
+
+**Sequencing rationale**: the live VPS account exercises every feature the app will
+ever have; secondary accounts (gateway IMAP, QNAP archive) reuse those features
+unchanged over additional JMAP endpoints. Building them last means the multi-account
+plumbing (already in the data model from M0) is validated against a finished, stable
+feature set — and the app is launchable the moment the primary experience is done.
 
 ---
 
@@ -433,7 +443,8 @@ app, message translation, desktop exploration.
 5. **JMAP Calendars is still a draft** — track the spec; the CalDAV path guarantees
    coverage regardless.
 6. **Gmail OAuth verification** (restricted-scope audit for IMAP access) — start the
-   CASA/verification process early in M2; app works with app-passwords meanwhile.
+   CASA/verification process when M5 is scheduled; app works with app-passwords
+   meanwhile — and this whole risk now sits outside the v1.0 critical path.
 7. **Apple Developer requirements** — default-mail-client entitlement request, push
    certificates, and App Store review for a mail client (precedented, but plan lead time).
 8. **Scope discipline**: parity with Outlook is a long tail — the M-gates above define
