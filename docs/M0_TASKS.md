@@ -118,7 +118,13 @@ Estimated 3–4 weeks. Tasks are ordered; each has a done-check.
 
 ## Explicit deferrals (do NOT build in M0)
 
-IMAP (M2) · calendar (M3) · attachment text extraction & full search (M4; the FTS5
-virtual table is created in T1.2 but only populated with subjects/senders for now) ·
-push notifications & background tasks (M1) · encryption beyond at-rest (M5) ·
-compose/send (M1).
+IMAP gateway + QNAP archive tier (M2 — see `ARCHIVE_TIER.md`; note the app itself
+never gains IMAP code) · calendar (M3) · attachment text extraction & full search
+(M4; the FTS5 virtual table is created in T1.2 but only populated with
+subjects/senders for now) · push notifications & background tasks (M1) · encryption
+beyond at-rest (M5) · compose/send (M1).
+
+One M0 payoff worth noting: because the archive is just another JMAP endpoint, the
+JMAP client built in M0 can sign into a QNAP archive instance as-is — so multi-account
+support gets validated in M1 dogfooding (live + archive) well before the gateway
+exists.

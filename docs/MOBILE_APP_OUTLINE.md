@@ -1,15 +1,23 @@
 # Rocimail for iPhone — Product & Technical Outline
 
-An **iPhone** email + calendar app supporting **JMAP** and **IMAP/SMTP** mail accounts
-and **JMAP Calendars / CalDAV** calendar accounts, with **full-text search including
-attachment contents** (critical for JMAP; lighter for IMAP), optional **end-to-end
-encryption**, and a complete daily-driver feature set comparable to Zoho Mail or
-Outlook — good enough to set as your default mail app on iOS.
+An **iPhone** email + calendar app for **JMAP** mail (with **IMAP/SMTP** accounts
+connected through a self-hosted gateway) and **JMAP Calendars / CalDAV** calendars,
+with **full-text search including attachment contents** (critical for JMAP; lighter
+for gateway-backed IMAP), optional **end-to-end encryption**, and a complete
+daily-driver feature set comparable to Zoho Mail or Outlook — good enough to set as
+your default mail app on iOS.
 
-**Scope decision**: this is an **iPhone-only project for v1**, built in plain
-Swift/SwiftUI with no cross-platform framework. Android is a possible future phase
-(see §14) and nothing in v1 blocks it — but we don't pay any cross-platform complexity
-tax today for it.
+**Scope decisions**:
+
+- **iPhone-only for v1**, built in plain Swift/SwiftUI with no cross-platform
+  framework. Android is a possible future phase (see §14) and nothing in v1 blocks it.
+- **The app speaks JMAP only.** IMAP/SMTP accounts are presented as JMAP by a
+  **gateway** built into the existing Rocimail Node server (§7) — no IMAP code ships
+  on the device.
+- **Two-tier mail storage** (§3): live mail on the Stalwart VPS; a static, read-only
+  **archive** of old company accounts (domains since sold, no new mail ever) on a
+  second Stalwart instance running on the user's QNAP NAS, reached over Tailscale.
+  To the app the archive is just another JMAP account.
 
 ---
 
@@ -18,7 +26,8 @@ tax today for it.
 | Goal | What it means concretely |
 | --- | --- |
 | Daily-driver mail app | Fast unified inbox, reliable push notifications, offline reading and composing, set-as-default on iOS |
-| Protocol-native | JMAP first-class (RFC 8620/8621), IMAP/SMTP fully supported for everything else — no proprietary gateway required |
+| JMAP-only client | The app implements one protocol (RFC 8620/8621). IMAP/SMTP accounts connect via the self-hosted Rocimail gateway; the QNAP archive is a native JMAP server |
+| Two-tier storage | Live mail on the Stalwart VPS (always reachable, stays small); read-only historical archive on QNAP Stalwart over Tailscale, searchable like any account |
 | Calendar built in | Events, invites, recurrence, reminders, multiple accounts — JMAP Calendars and CalDAV |
 | Search everything | **JMAP: critical-path, full-depth search** — local full-text index over headers, bodies, and extracted attachment text, merged with server-side search. IMAP: lighter tier — headers/bodies of synced mail plus server `SEARCH`; attachment indexing best-effort only |
 | Private & secure | TLS everywhere, encrypted local storage, optional OpenPGP/S/MIME end-to-end encryption, remote-image/tracker blocking |
@@ -27,6 +36,7 @@ tax today for it.
 ### Non-goals (v1)
 
 - **Android** (deferred — see §14 for the path; nothing in v1 forecloses it)
+- **On-device IMAP/SMTP protocol code** (the gateway owns it; the app never speaks IMAP)
 - Exchange ActiveSync / EWS / proprietary Gmail API accounts (IMAP covers Gmail; revisit later)
 - Contacts management app (address autocomplete from system contacts + mail history in v1; CardDAV sync in v2)
 - iPad-optimized layout (runs scaled; real split-view layout post-v1)
@@ -35,11 +45,12 @@ tax today for it.
 ### Relationship to the existing repo
 
 Rocimail today is a Node/Express server + React web client that already normalizes JMAP
-and IMAP behind one `MailProvider` interface. The iPhone app **reuses the concepts, not
-the runtime**: the phone talks JMAP/IMAP **directly** (no middlebox holding
-credentials), but the unified data model, provider abstraction, and JMAP-first design
-carry over directly. The existing server later gains one small new role: the **push
-gateway** (see §7).
+and IMAP behind one `MailProvider` interface (`server/src/imap.ts`, `server/src/jmap.ts`).
+That server is no longer just the web backend — it becomes the **gateway**: it presents
+IMAP/SMTP accounts to the phone as JMAP, holds IMAP IDLE connections, and relays push
+to APNs (§7). The phone talks JMAP directly to the VPS Stalwart and the QNAP archive;
+only third-party IMAP accounts pass through the gateway, which the user self-hosts
+alongside Stalwart.
 
 ---
 
@@ -55,8 +66,8 @@ own, and it keeps a future Android port systematic (§14).
 | UI | SwiftUI (iOS 17+), UIKit interop only where needed (rich-text editor, message web view) |
 | Concurrency | Swift structured concurrency (async/await, actors) |
 | JMAP client | Hand-rolled on `URLSession` + `Codable` — JMAP is just HTTPS+JSON, no library needed |
-| IMAP/SMTP client | MailCore2 (battle-tested C++/ObjC) to start; evaluate SwiftNIO-based replacement if it ages badly |
-| MIME parsing | MailCore2 for IMAP messages; JMAP servers hand us parsed structure already |
+| IMAP/SMTP accounts | **Rocimail gateway** (TypeScript, extends the existing Node server's `imap.ts` provider) presents them as JMAP — zero IMAP or MIME-parsing code on the device |
+| Archive access | Second Stalwart instance on the QNAP (Container Station), reached over **Tailscale** (iOS on-demand VPN profile) — plain JMAP to the app |
 | Local store | SQLite via GRDB.swift + **FTS5** for search; SQLCipher for encryption at rest |
 | HTML mail rendering | `WKWebView`, JS disabled, CSP locked down, content sanitized before load |
 | Calendar data | Hand-rolled JMAP Calendars client; CalDAV via `URLSession` (WebDAV verbs) + an iCalendar (RFC 5545) parser package |
@@ -68,8 +79,10 @@ own, and it keeps a future Android port systematic (§14).
 **Why not KMP / React Native / Rust?** All three exist to share code with Android. With
 Android out of scope, each is pure overhead: an extra language, an extra build system,
 and a seam between the engine and iOS. Plain Swift gives the fastest development, the
-best debugging, and the most native result. The only real cost — JMAP/IMAP client code
-that Android can't reuse someday — is addressed by the package structure in §14.
+best debugging, and the most native result. The only real cost — JMAP client code that
+Android can't reuse someday — is addressed by the package structure in §14, and the
+JMAP-only decision shrinks that surface further: the gateway (TypeScript) and both
+Stalwart instances are platform-neutral already.
 
 **Minimum OS**: iOS 17+ (SwiftUI maturity, `Observable` macro; default-mail-app support
 has existed since iOS 14 so no constraint there).
@@ -86,9 +99,9 @@ has existed since iOS 14 so no constraint there).
 ├────────────────────────────────────────────────────────────┤
 │  Local Swift Packages (the engine — no UI imports)         │
 │                                                            │
-│  RociMail        MailProvider protocol                     │
-│                    ├─ JMAPProvider   (URLSession + Codable)│
-│                    └─ IMAPProvider   (MailCore2 + SMTP)    │
+│  RociMail        JMAP client (URLSession + Codable) —      │
+│                  every mail account is a JMAP endpoint:    │
+│                  VPS Stalwart, QNAP archive, or gateway    │
 │  RociCalendar    CalendarProvider protocol                 │
 │                    ├─ JMAPCalendarProvider                 │
 │                    └─ CalDAVProvider (+ iCalendar parser)  │
@@ -107,6 +120,32 @@ has existed since iOS 14 so no constraint there).
 └────────────────────────────────────────────────────────────┘
 ```
 
+### Deployment topology
+
+```
+                        ┌──────────────────────────────────────┐
+                        │  VPS                                 │
+  ┌────────┐   JMAP     │  ┌──────────┐   ┌────────────────┐  │
+  │ iPhone │◄──HTTPS───►│  │ Stalwart │   │ Rocimail       │  │
+  │  app   │            │  │ (live    │   │ gateway        │  │
+  └───┬────┘   JMAP     │  │  mail)   │   │ IMAP⇄JMAP +    │  │──IMAP/SMTP──► Gmail,
+      │    ◄───HTTPS───►│  └────┬─────┘   │ APNs push +    │  │               work
+      │                 │       └────────►│ IMAP IDLE      │  │               accts…
+      │                 │   StateChange   └────────────────┘  │
+      │                 └──────────────────────────────────────┘
+      │   JMAP over Tailscale   ┌───────────────────────────┐
+      └────────────────────────►│  QNAP (Container Station) │
+                                │  Stalwart — read-only     │
+                                │  archive of old company   │
+                                │  accounts (one-time       │
+                                │  EML/Maildir import)      │
+                                └───────────────────────────┘
+```
+
+Three JMAP endpoints, one client code path. The archive is static (the old domains
+receive no new mail), so it needs no push, no sending identity, and no sync jobs —
+the app treats it as a read-only, server-searchable account.
+
 **Local-first**: the UI reads *only* from the local store; the sync engine reconciles
 with servers. Every mutation (flag, move, delete, send, event edit) is written locally
 first, queued in an **outbox/op-log**, and replayed to the server with retry — so the
@@ -116,16 +155,21 @@ app is fully usable offline and never blocks on the network.
 
 ## 4. Accounts & Authentication
 
-- **Account types**: JMAP (mail + calendar in one session), IMAP+SMTP (mail),
-  CalDAV (calendar). One "identity" can bundle e.g. IMAP mail + CalDAV calendar.
+- **Account types** (all JMAP to the app): direct JMAP (VPS Stalwart, QNAP archive),
+  gateway-backed IMAP+SMTP, plus CalDAV (calendar). One "identity" can bundle e.g.
+  gateway mail + CalDAV calendar. The archive account is flagged **read-only**
+  (search/read; no compose identity; moves/deletes disabled by default).
 - **Setup flow**:
-  1. Enter email address → autodiscovery: `/.well-known/jmap` (JMAP), SRV records
-     (RFC 6186 `_imaps._tcp`, `_submission._tcp`, RFC 6764 `_caldavs._tcp`),
-     Thunderbird autoconfig XML as fallback → manual settings screen as last resort.
-  2. Auth: password (Basic for JMAP, LOGIN/PLAIN for IMAP), **OAuth 2.0** where
-     advertised (XOAUTH2 for Gmail/Outlook.com IMAP via `ASWebAuthenticationSession`;
-     OAuth for JMAP per RFC 8620), app-specific passwords supported.
-- **Credential storage**: iOS Keychain only; never in the DB.
+  1. Enter email address → autodiscovery: `/.well-known/jmap` (JMAP), RFC 6764
+     `_caldavs._tcp` SRV for CalDAV → manual settings screen as fallback. Adding an
+     IMAP account happens against the gateway (host/port/TLS form, like the web app's
+     "+ Add IMAP account" flow); the gateway verifies by connecting.
+  2. Auth: password (Basic) for JMAP; **OAuth 2.0** where advertised (RFC 8620 for
+     JMAP; XOAUTH2 tokens for Gmail/Outlook.com obtained in-app via
+     `ASWebAuthenticationSession` and stored by the gateway), app-specific passwords
+     supported.
+- **Credential storage**: iOS Keychain for JMAP credentials; IMAP credentials/tokens
+  live on the self-hosted gateway (disclosed clearly in the add-account flow).
 - **Multi-account**: unlimited accounts, per-account color & signature, unified inbox.
 
 ---
@@ -178,8 +222,9 @@ app is fully usable offline and never blocks on the network.
 ## 6. Search — Full Text Including Attachments
 
 The flagship feature — with an explicit priority split: **full-depth search is a
-hard requirement for JMAP accounts** (the primary account type); **IMAP search is a
-lighter, good-enough tier** and must never block or complicate the JMAP path.
+hard requirement for native JMAP accounts** (VPS live mail and the QNAP archive);
+**gateway-backed IMAP search is a lighter, good-enough tier** and must never block
+or complicate the JMAP path.
 
 ### JMAP accounts (critical path — full depth)
 Two layers, merged and deduped in one results UI:
@@ -201,11 +246,19 @@ Two layers, merged and deduped in one results UI:
   - Index encrypted at rest with the database (SQLCipher)
   - Ranking: BM25 + recency boost + sender-affinity boost
 
-### IMAP accounts (lighter tier)
+**The QNAP archive gets the full-depth path for free**: it's a real Stalwart, so its
+server-side index covers all imported mail including attachments. Archive search
+requires tailnet reachability (on-demand VPN makes this near-transparent); the app
+shows a clear "archive unreachable" state instead of silently returning partial
+results, and the user can optionally sync chosen archive folders/date ranges into
+the local FTS index for fully offline search.
+
+### Gateway-backed IMAP accounts (lighter tier)
 - Local FTS over **headers and bodies of synced mail only** (same FTS5 index, same UX)
-- Server fallback via IMAP `SEARCH` (`TEXT`/`BODY`; `X-GM-RAW` on Gmail) for unsynced history
-- **Attachment content indexing is best-effort and off by default** for IMAP: the
-  extraction pipeline can be enabled per IMAP account in settings, but it is not part
+- Server fallback: the app issues a normal JMAP `Email/query`; the gateway translates
+  it to IMAP `SEARCH` (`TEXT`/`BODY`; `X-GM-RAW` on Gmail) for unsynced history
+- **Attachment content indexing is best-effort and off by default** for IMAP accounts:
+  the extraction pipeline can be enabled per account in settings, but it is not part
   of the acceptance criteria, gets the lowest background-work priority, and IMAP-specific
   extraction bugs are never launch blockers
 - Results clearly labeled when a search couldn't cover attachment contents, so
@@ -223,27 +276,33 @@ Two layers, merged and deduped in one results UI:
 ## 7. Sync Engine & Push (the iOS-specific hard part)
 
 ### Delta sync
-- **JMAP**: `Email/changes`, `Mailbox/changes`, `Thread/changes` with `sinceState`;
-  batched backfill (newest N days first, then progressive history); blob download on demand
-- **IMAP**: CONDSTORE/QRESYNC (RFC 7162) where available; fallback UID-based diffing;
-  BODYSTRUCTURE-driven lazy part fetch; special-use detection (RFC 6154)
-- Configurable sync window per account (e.g. 30 days offline, older-on-demand)
+- **The app implements exactly one sync engine** — JMAP: `Email/changes`,
+  `Mailbox/changes`, `Thread/changes` with `sinceState`; batched backfill (newest
+  N days first, then progressive history); blob download on demand
+- **IMAP mechanics live in the gateway**: it maps CONDSTORE/QRESYNC (RFC 7162), UID
+  diffing, BODYSTRUCTURE lazy fetch, and special-use detection (RFC 6154) onto
+  JMAP-style state strings. The hardest part is state mapping (IMAP `UIDVALIDITY`
+  resets → JMAP `cannotCalculateChanges`, which the app already handles for real
+  JMAP servers)
+- **Archive**: syncs like any JMAP account but is effectively immutable — after
+  initial state it produces no changes, so it costs nothing at refresh time
+- Configurable sync window per account (e.g. 30 days offline, older-on-demand;
+  archive default: envelopes-on-demand only, no backfill)
 - Conflict policy: server wins for flags/moves, client op-log replays idempotently
 
 ### Push notifications (iOS constraints drive the design)
 iOS kills background sockets, so "instant mail" requires APNs:
 
-- **JMAP accounts**: JMAP Push via `PushSubscription` → APNs. Requires a small
-  **push gateway** added to the existing Rocimail Node server: the JMAP server POSTs
-  `StateChange` to the gateway, which relays to APNs with content-free payloads
-  (server never sees message content, only "state changed" + account hash). The app
-  wakes via a Notification Service Extension, fetches the new mail itself, and builds
-  the notification locally (sender/subject, decrypted where applicable).
-- **IMAP accounts**: no true push without a held connection. Options, in order:
-  1. Optional **Rocimail relay**: user opts in; the relay holds IMAP IDLE (credentials
-     end-to-end encrypted to the relay, clearly disclosed) and pings APNs.
-  2. Without relay: BGAppRefreshTask periodic fetch (~15-min best case, at iOS's
-     discretion) — an honest "battery-friendly, not instant" setting.
+- **JMAP accounts (VPS)**: JMAP Push via `PushSubscription` → APNs. The Rocimail
+  gateway doubles as the push relay: the JMAP server POSTs `StateChange` to it, and
+  it relays to APNs with content-free payloads (never message content, only "state
+  changed" + account hash). The app wakes via a Notification Service Extension,
+  fetches the new mail itself, and builds the notification locally (sender/subject,
+  decrypted where applicable).
+- **Gateway-backed IMAP accounts**: solved by the same gateway — it already holds
+  IMAP IDLE connections for sync, so new-mail events flow through the identical
+  APNs path. No background-fetch compromise needed.
+- **Archive**: no push — nothing ever arrives there.
 
 ### Background execution
 - BGAppRefreshTask (periodic sync), BGProcessingTask (indexing/extraction on power),
@@ -325,7 +384,7 @@ iOS kills background sockets, so "instant mail" requires APNs:
 | --- | --- | --- |
 | **M0 — Foundations** (3–4 wk) | Xcode project + Swift Package layout, GRDB schema, JMAP client (session discovery, Mailbox/Email get+query+changes), design system, account setup w/ autodiscovery | Read mail from a Stalwart account on an iPhone; offline cache works |
 | **M1 — Daily-drivable mail (JMAP)** (6–8 wk) | Threading, reader w/ sanitized HTML, composer + send + drafts, flags/move/delete, unified inbox, local FTS (bodies), APNs push gateway on the Rocimail server | You dogfood your JMAP account as your primary mail app |
-| **M2 — IMAP/SMTP** (5–6 wk) | IMAP sync engine (QRESYNC), SMTP submission, Gmail/Outlook.com OAuth, background-fetch fallback, default-mail-app registration | Any IMAP account usable end-to-end |
+| **M2 — Gateway + archive tier** (3–4 wk) | **Server side, no Mac needed**: JMAP façade on the Rocimail Node server over the existing `imap.ts` provider (state mapping, IDLE, APNs relay for IMAP), Gmail/Outlook.com OAuth token handling; QNAP Stalwart deployment + one-time EML/Maildir import (see `ARCHIVE_TIER.md`); Tailscale setup; default-mail-app registration in the app | A Gmail-via-gateway account and the QNAP archive both work end-to-end in the app; archive search finds old-company mail incl. attachments |
 | **M3 — Calendar** (6–8 wk) | JMAP Calendars + CalDAV sync, all views, event CRUD + recurrence, iMIP invite cards in mail, reminders, widgets | Invites round-trip with Google/Fastmail/Outlook users |
 | **M4 — Search everywhere** (4–5 wk) | **JMAP**: attachment extraction pipeline + OCR opt-in, query syntax + filter chips, `Email/query` server-search merge, Spotlight integration. **IMAP**: header/body local search + server `SEARCH` fallback only (attachment indexing optional, non-blocking) | "Find that PDF from March" works offline on a JMAP account; IMAP search covers headers/bodies of synced mail |
 | **M5 — Encryption & power features** (6–8 wk) | OpenPGP + Autocrypt, S/MIME, app lock, snooze/send-later/undo-send, rules engine + Sieve management, templates, vacation responder | Feature parity checklist vs Zoho/Outlook signed off |
@@ -355,22 +414,29 @@ app, message translation, desktop exploration.
 
 ## 13. Key Risks & Open Questions
 
-1. **iOS background limits vs "instant" push for IMAP** — mitigated by the opt-in relay;
-   needs clear UX honesty. Decision: build the relay in M2 or defer?
-2. **MailCore2 age** — it works and ships in many clients, but it's C++/ObjC and lightly
-   maintained. Contained behind the `IMAPProvider` protocol; budget for a SwiftNIO
-   replacement if it becomes a drag. JMAP-first means this risk touches secondary
-   accounts only.
-3. **Attachment extraction cost** (battery/storage) — strict budgets + charge-only
+1. **Gateway availability = IMAP-account availability** — if the self-hosted gateway
+   is down, third-party IMAP accounts are unreachable (VPS JMAP mail is unaffected).
+   Mitigate: run it alongside Stalwart on the VPS with monitoring/auto-restart;
+   cached mail still reads offline.
+2. **Gateway state mapping is the main new engineering risk** — translating IMAP
+   UIDVALIDITY/QRESYNC semantics into JMAP-style state strings correctly. Contained:
+   it's TypeScript on the existing `imap.ts` provider, testable headlessly against
+   Dovecot/Gmail without a Mac, and the app-side fallback (`cannotCalculateChanges`
+   → refetch window) must work for real JMAP servers anyway.
+3. **Archive reachability depends on the tailnet** — Tailscale's iOS on-demand VPN
+   makes this near-transparent, but the app needs a graceful "archive offline" state
+   and must never let an unreachable archive stall unified views or search.
+4. **Attachment extraction cost** (battery/storage) — strict budgets + charge-only
    default; needs early instrumentation. Scope contained by design: extraction is a
-   JMAP-account commitment, off by default for IMAP.
-4. **JMAP Calendars is still a draft** — track the spec; the CalDAV path guarantees
+   JMAP-account commitment, off by default for gateway accounts, and the archive is
+   indexed server-side by Stalwart anyway.
+5. **JMAP Calendars is still a draft** — track the spec; the CalDAV path guarantees
    coverage regardless.
-5. **Gmail OAuth verification** (restricted-scope audit for IMAP access) — start the
+6. **Gmail OAuth verification** (restricted-scope audit for IMAP access) — start the
    CASA/verification process early in M2; app works with app-passwords meanwhile.
-6. **Apple Developer requirements** — default-mail-client entitlement request, push
+7. **Apple Developer requirements** — default-mail-client entitlement request, push
    certificates, and App Store review for a mail client (precedented, but plan lead time).
-7. **Scope discipline**: parity with Outlook is a long tail — the M-gates above define
+8. **Scope discipline**: parity with Outlook is a long tail — the M-gates above define
    "enough"; anything not listed goes to post-v1 backlog by default.
 
 ---
@@ -386,8 +452,10 @@ now. What keeps a future Android app cheap without any framework today:
    headless) translate almost mechanically.
 2. **The hardest logic is protocol logic**, and the protocols are documented RFCs plus
    our own interop test corpus — the second implementation is far cheaper than the first.
-3. **The push gateway is shared infrastructure**: it's server-side and platform-neutral
-   (APNs today, FCM added later), so Android inherits push for free.
+3. **Most of the system is already platform-neutral**: the gateway (IMAP⇄JMAP + push;
+   APNs today, FCM added later), both Stalwart instances, and the QNAP archive are
+   server-side — an Android app would reuse all of it and only needs the JMAP client
+   + UI, the same small surface the iPhone app implements.
 4. **When the time comes**, the realistic options are (a) rewrite the engine in Kotlin
    against the same test corpus, or (b) port the engine to Kotlin Multiplatform and
    swap the iPhone app onto it gradually. Both stay open; neither requires deciding now.
