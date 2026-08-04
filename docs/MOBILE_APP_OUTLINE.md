@@ -15,7 +15,7 @@ your default mail app on both platforms.
 | Daily-driver mail app | Fast unified inbox, reliable push notifications, offline reading and composing, set-as-default on iOS and Android |
 | Protocol-native | JMAP first-class (RFC 8620/8621), IMAP/SMTP fully supported for everything else — no proprietary gateway required |
 | Calendar built in | Events, invites, recurrence, reminders, multiple accounts — JMAP Calendars and CalDAV |
-| Search everything | Local full-text index over headers, bodies, **and extracted attachment text**; server-side search as fallback for unsynced mail |
+| Search everything | **JMAP: critical-path, full-depth search** — local full-text index over headers, bodies, and extracted attachment text, merged with server-side search. IMAP: lighter tier — headers/bodies of synced mail plus server `SEARCH`; attachment indexing best-effort only |
 | Private & secure | TLS everywhere, encrypted local storage, optional OpenPGP/S/MIME end-to-end encryption, remote-image/tracker blocking |
 | One codebase | Shared core across iOS and Android with native-feeling UI |
 
@@ -178,24 +178,38 @@ app is fully usable offline and never blocks on the network.
 
 ## 6. Search — Full Text Including Attachments
 
-The flagship feature. Two tiers, merged in one results UI:
+The flagship feature — with an explicit priority split: **full-depth search is a
+hard requirement for JMAP accounts** (the primary account type); **IMAP search is a
+lighter, good-enough tier** and must never block or complicate the JMAP path.
 
-### Tier 1 — Local index (instant, offline, includes attachments)
-- **SQLite FTS5** index (trigram + unicode61 tokenizers; CJK support via ICU) over:
-  subject, from/to/cc, body text (HTML→text), filenames, **and extracted attachment text**
-- **Attachment text extraction pipeline** (background, budgeted):
-  - PDF (incl. per-page text; OCR for image-only PDFs via platform Vision/ML Kit — opt-in, on-device only)
-  - Office: docx/xlsx/pptx (XML unzip + text pull), legacy doc/xls best-effort
-  - Plain/rtf/csv/markdown/html; .eml/.ics nested messages
-  - Images: EXIF + on-device OCR (opt-in)
-  - Extraction runs on charge+Wi-Fi by default; per-account size caps; queue survives restarts
-- Index encrypted at rest with the database (SQLCipher)
-- Ranking: BM25 + recency boost + sender-affinity boost
+### JMAP accounts (critical path — full depth)
+Two layers, merged and deduped in one results UI:
 
-### Tier 2 — Server search (covers mail not synced locally)
-- JMAP `Email/query` with full filter tree (JMAP servers like Stalwart/Fastmail index
-  attachments server-side — surface `attachments:` scope when the server advertises it)
-- IMAP `SEARCH` (`TEXT`/`BODY`, `X-GM-RAW` on Gmail) — merged and deduped with local hits
+- **Server-side first**: JMAP `Email/query` with the full filter tree. JMAP servers
+  (Stalwart, Fastmail) index message text — and often attachment content — server-side,
+  so even mail never synced to the device is searchable instantly. Surface the
+  `attachments:` / body-scoped filters whenever the server advertises them.
+- **Local FTS index** for offline use and attachment depth the server may lack:
+  - **SQLite FTS5** (trigram + unicode61 tokenizers; CJK via ICU) over subject,
+    from/to/cc, body text (HTML→text), filenames, **and extracted attachment text**
+  - **Attachment text extraction pipeline** (background, budgeted):
+    - PDF (per-page text; OCR for image-only PDFs via platform Vision/ML Kit — opt-in, on-device only)
+    - Office: docx/xlsx/pptx (XML unzip + text pull), legacy doc/xls best-effort
+    - Plain/rtf/csv/markdown/html; .eml/.ics nested messages
+    - Images: EXIF + on-device OCR (opt-in)
+    - Extraction runs on charge+Wi-Fi by default; per-account size caps; queue survives restarts
+  - Index encrypted at rest with the database (SQLCipher)
+  - Ranking: BM25 + recency boost + sender-affinity boost
+
+### IMAP accounts (lighter tier)
+- Local FTS over **headers and bodies of synced mail only** (same FTS5 index, same UX)
+- Server fallback via IMAP `SEARCH` (`TEXT`/`BODY`; `X-GM-RAW` on Gmail) for unsynced history
+- **Attachment content indexing is best-effort and off by default** for IMAP: the
+  extraction pipeline can be enabled per IMAP account in settings, but it is not part
+  of the acceptance criteria, gets the lowest background-work priority, and IMAP-specific
+  extraction bugs are never launch blockers
+- Results clearly labeled when a search couldn't cover attachment contents, so
+  expectations stay honest per account type
 
 ### Search UX
 - One search bar with scopes: All / current folder / account
@@ -314,7 +328,7 @@ The flagship feature. Two tiers, merged in one results UI:
 | **M1 — Daily-drivable mail (JMAP)** (6–8 wk) | Threading, reader w/ sanitized HTML, composer + send + drafts, flags/move/delete, unified inbox, local FTS (bodies), APNs/FCM push gateway | Team dogfoods JMAP accounts as primary app |
 | **M2 — IMAP/SMTP parity** (6 wk) | IMAP sync engine (QRESYNC), SMTP submission, Gmail/Outlook.com OAuth, background fetch fallback, default-app registration both platforms | Any IMAP account usable end-to-end |
 | **M3 — Calendar** (6–8 wk) | JMAP Calendars + CalDAV sync, all views, event CRUD + recurrence, iMIP invite cards in mail, reminders, widgets | Invites round-trip with Google/Fastmail/Outlook users |
-| **M4 — Search everywhere** (4–6 wk) | Attachment extraction pipeline + OCR opt-in, query syntax + filter chips, server-search merge, Spotlight integration | "Find that PDF from March" works offline |
+| **M4 — Search everywhere** (4–6 wk) | **JMAP**: attachment extraction pipeline + OCR opt-in, query syntax + filter chips, `Email/query` server-search merge, Spotlight integration. **IMAP**: header/body local search + server `SEARCH` fallback only (attachment indexing optional, non-blocking) | "Find that PDF from March" works offline on a JMAP account; IMAP search covers headers/bodies of synced mail |
 | **M5 — Encryption & power features** (6–8 wk) | OpenPGP + Autocrypt, S/MIME, app lock, snooze/send-later/undo-send, rules engine + Sieve management, templates, vacation responder | Feature parity checklist vs Zoho/Outlook signed off |
 | **v1.0 launch** | Store polish: onboarding, accessibility audit (VoiceOver/TalkBack), localization (en + 5), perf budget (cold start < 1.5 s, 60 fps lists) | App Store + Play review passed, crash-free > 99.5 % |
 
@@ -344,7 +358,8 @@ snippet-based smart compose, desktop (KMP → Compose Desktop) exploration.
 1. **iOS background limits vs "instant" push for IMAP** — mitigated by the opt-in relay;
    need clear UX honesty. Decision: build relay in M2 or defer?
 2. **Attachment extraction cost** (battery/storage) — strict budgets + charge-only
-   default; needs early instrumentation.
+   default; needs early instrumentation. Scope is contained by design: extraction is
+   a JMAP-account commitment, off by default for IMAP.
 3. **KMP crypto FFI** (sequoia-pgp via Rust) adds build complexity — spike in M0;
    Bouncy Castle (Android) + ObjectivePGP (iOS) behind one interface is the fallback.
 4. **JMAP Calendars is still a draft** — track spec; CalDAV path guarantees coverage.
