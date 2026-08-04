@@ -1,0 +1,16 @@
+services:
+  # Local Stalwart mail server for development/testing.
+  # Admin UI on http://localhost:8080 — the initial admin password is printed
+  # in the container logs on first start.
+  stalwart:
+    image: stalwartlabs/stalwart:latest
+    container_name: rocimail-stalwart
+    ports:
+      - "8080:8080"   # HTTP (JMAP session at /.well-known/jmap + admin UI)
+      - "1443:443"    # HTTPS
+      - "1993:993"    # IMAPS
+      - "1465:465"    # SMTP submissions (implicit TLS)
+      - "1587:587"    # SMTP submission (STARTTLS)
+    volumes:
+      - ./stalwart-data:/opt/stalwart
+    restart: unless-stopped
