@@ -44,3 +44,6 @@ targets:
         CODE_SIGN_STYLE: Automatic
         SWIFT_VERSION: "5.10"
         TARGETED_DEVICE_FAMILY: "1"
+        # "Rocimail" collides with the RociMail package module on
+        # case-insensitive filesystems; keep the app module distinct.
+        PRODUCT_MODULE_NAME: RocimailApp
