@@ -185,7 +185,7 @@ public actor SyncEngine {
     /// Flag change: applied locally at once, queued, then replayed.
     public func setSeen(_ seen: Bool, messageId: String) async {
         try? store.setFlags(messageId: messageId, accountId: account.id, seen: seen)
-        try? store.enqueue(
+        _ = try? store.enqueue(
             accountId: account.id,
             kind: OpKind.setKeyword,
             payload: [
@@ -199,7 +199,7 @@ public actor SyncEngine {
 
     public func setFlagged(_ flagged: Bool, messageId: String) async {
         try? store.setFlags(messageId: messageId, accountId: account.id, flagged: flagged)
-        try? store.enqueue(
+        _ = try? store.enqueue(
             accountId: account.id,
             kind: OpKind.setKeyword,
             payload: [

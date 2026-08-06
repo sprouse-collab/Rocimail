@@ -61,6 +61,13 @@ extension JMAPClient {
         public var total: Int?
         public var queryState: String
         public var position: Int
+
+        public init(ids: [String], total: Int? = nil, queryState: String, position: Int) {
+            self.ids = ids
+            self.total = total
+            self.queryState = queryState
+            self.position = position
+        }
     }
 
     /// Page of message ids in a mailbox, newest first, with optional
