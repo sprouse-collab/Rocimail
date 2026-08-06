@@ -6,3 +6,8 @@ dist/
 !.env.example
 .DS_Store
 stalwart-data/
+
+# iOS
+ios/Rocimail.xcodeproj
+ios/RociKit/.build
+*.xcuserdata

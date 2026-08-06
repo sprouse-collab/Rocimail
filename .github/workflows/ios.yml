@@ -1,0 +1,42 @@
+name: iOS
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+  pull_request:
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+
+jobs:
+  rocikit-tests:
+    name: RociKit package tests
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Run package tests
+        run: swift test --package-path ios/RociKit
+
+  app-build:
+    name: App build (iOS Simulator)
+    runs-on: macos-15
+    needs: rocikit-tests
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate --spec ios/project.yml --project ios
+      - name: Build for iOS Simulator
+        run: >
+          xcodebuild build
+          -project ios/Rocimail.xcodeproj
+          -scheme Rocimail
+          -destination 'generic/platform=iOS Simulator'
+          -configuration Debug
+          CODE_SIGNING_ALLOWED=NO
