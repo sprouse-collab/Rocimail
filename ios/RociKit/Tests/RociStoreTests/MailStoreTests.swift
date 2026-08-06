@@ -162,6 +162,120 @@ final class MailStoreTests: XCTestCase {
         XCTAssertTrue(hits.isEmpty)
     }
 
+    func testBodyTextJoinsSearchIndex() throws {
+        try store.upsertMessages([header(id: "m1", subject: "Invoice")])
+        XCTAssertTrue(
+            try store.searchMessages(accountId: accountId, matchExpression: "\"zebra\"").isEmpty
+        )
+        try store.saveBody(
+            messageId: "m1", accountId: accountId,
+            html: nil, text: "the zebra crossed the road"
+        )
+        XCTAssertEqual(
+            try store.searchMessages(accountId: accountId, matchExpression: "\"zebra\"").map(\.id),
+            ["m1"]
+        )
+        // A header re-upsert (delta refresh) must not wipe the indexed body.
+        try store.upsertMessages([header(id: "m1", subject: "Invoice", seen: true)])
+        XCTAssertEqual(
+            try store.searchMessages(accountId: accountId, matchExpression: "\"zebra\"").map(\.id),
+            ["m1"]
+        )
+    }
+
+    func testHTMLBodyIsStrippedForIndexing() throws {
+        try store.upsertMessages([header(id: "m1")])
+        try store.saveBody(
+            messageId: "m1", accountId: accountId,
+            html: "<div><style>p{color:red}</style><p>flamingo &amp; friends</p></div>",
+            text: nil
+        )
+        XCTAssertEqual(
+            try store.searchMessages(accountId: accountId, matchExpression: "\"flamingo\"").map(\.id),
+            ["m1"]
+        )
+        XCTAssertTrue(
+            try store.searchMessages(accountId: accountId, matchExpression: "\"style\"").isEmpty,
+            "style tag contents are not indexed"
+        )
+    }
+
+    // MARK: - Threads (M1)
+
+    private func threaded(
+        id: String, thread: String?, at time: TimeInterval, seen: Bool = true
+    ) -> MessageHeader {
+        var h = header(id: id, receivedAt: Date(timeIntervalSince1970: time), seen: seen)
+        h.threadId = thread
+        return h
+    }
+
+    func testThreadSummariesGroupAndCount() throws {
+        try store.upsertMessages([
+            threaded(id: "m1", thread: "t1", at: 1_000, seen: true),
+            threaded(id: "m2", thread: "t1", at: 3_000, seen: false),
+            threaded(id: "m3", thread: nil, at: 2_000),
+        ])
+        let summaries = try store.threadSummaries(accountId: accountId, mailboxId: "inbox1")
+        XCTAssertEqual(summaries.map(\.latest.id), ["m2", "m3"], "newest thread first")
+        XCTAssertEqual(summaries[0].messageCount, 2)
+        XCTAssertEqual(summaries[0].unreadCount, 1)
+        XCTAssertEqual(summaries[1].messageCount, 1)
+    }
+
+    func testMessagesInThreadSpanMailboxes() throws {
+        try store.upsertMessages([
+            threaded(id: "m1", thread: "t1", at: 1_000),
+            {
+                var h = threaded(id: "m2", thread: "t1", at: 2_000)
+                h.mailboxIds = ["sent1"] // my reply lives in Sent
+                return h
+            }(),
+        ])
+        let thread = try store.messagesInThread(threadId: "t1", accountId: accountId)
+        XCTAssertEqual(thread.map(\.id), ["m1", "m2"], "oldest first, across mailboxes")
+    }
+
+    // MARK: - Move & unified inbox (M1)
+
+    func testMoveMessageLocally() throws {
+        try store.upsertMessages([header(id: "m1")])
+        try store.moveMessageLocally(messageId: "m1", accountId: accountId, toMailboxId: "trash1")
+        XCTAssertTrue(try store.messages(accountId: accountId, mailboxId: "inbox1").isEmpty)
+        XCTAssertEqual(
+            try store.messages(accountId: accountId, mailboxId: "trash1").map(\.id), ["m1"]
+        )
+    }
+
+    func testUnifiedInboxSpansAccounts() throws {
+        try store.saveAccount(
+            Account(
+                id: "acct2", kind: .jmap,
+                serverURL: URL(string: "https://other.example.com")!,
+                username: "two", displayName: "Two", jmapAccountId: "a02"
+            )
+        )
+        try store.replaceMailboxes(
+            [Mailbox(id: "inbox1", accountId: accountId, name: "Inbox", role: "inbox")],
+            accountId: accountId
+        )
+        try store.replaceMailboxes(
+            [Mailbox(id: "inboxB", accountId: "acct2", name: "Inbox", role: "inbox")],
+            accountId: "acct2"
+        )
+        try store.upsertMessages([
+            header(id: "m1", receivedAt: Date(timeIntervalSince1970: 1_000)),
+            {
+                var h = header(id: "m2", receivedAt: Date(timeIntervalSince1970: 2_000))
+                h.accountId = "acct2"
+                h.mailboxIds = ["inboxB"]
+                return h
+            }(),
+        ])
+        let unified = try store.unifiedInboxMessages()
+        XCTAssertEqual(unified.map(\.id), ["m2", "m1"], "both accounts, newest first")
+    }
+
     // MARK: - Sync state
 
     func testSyncStateRoundTrip() throws {

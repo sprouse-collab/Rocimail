@@ -7,9 +7,29 @@ import RociModel
 /// canned server responses (Stalwart-shaped fixtures).
 final class MockURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
+    /// Body of the most recent request (URLSession moves httpBody into a
+    /// stream by the time URLProtocol sees it).
+    nonisolated(unsafe) static var lastRequestBody: Data?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    private static func drainBody(of request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        let bufferSize = 16_384
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+        defer { buffer.deallocate() }
+        while stream.hasBytesAvailable {
+            let read = stream.read(buffer, maxLength: bufferSize)
+            guard read > 0 else { break }
+            data.append(buffer, count: read)
+        }
+        return data
+    }
 
     override func startLoading() {
         guard let handler = Self.handler else {
@@ -17,6 +37,7 @@ final class MockURLProtocol: URLProtocol {
             return
         }
         do {
+            Self.lastRequestBody = Self.drainBody(of: request)
             let (status, data) = try handler(request)
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -47,6 +68,7 @@ final class JMAPClientTests: XCTestCase {
 
     override func tearDown() {
         MockURLProtocol.handler = nil
+        MockURLProtocol.lastRequestBody = nil
         super.tearDown()
     }
 
@@ -268,6 +290,132 @@ final class JMAPClientTests: XCTestCase {
             // expected
         } catch {
             XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    // MARK: - Submission (M1)
+
+    func testIdentitiesParsing() async throws {
+        try await connect()
+        respond(
+            method: "Identity/get",
+            result: """
+                {"accountId": "a01", "state": "i-1", "list": [
+                  {"id": "ident1", "name": "Uwe Ser", "email": "user@example.com"},
+                  {"id": "ident2", "name": "", "email": "alias@example.com"}
+                ]}
+                """
+        )
+        let identities = try await client.identities()
+        XCTAssertEqual(identities.map(\.id), ["ident1", "ident2"])
+        XCTAssertEqual(identities[0].email, "user@example.com")
+    }
+
+    func testSendBatchesCreateAndSubmission() async throws {
+        try await connect()
+        MockURLProtocol.handler = { _ in
+            let body = """
+                {"methodResponses": [
+                  ["Email/set", {"accountId": "a01",
+                    "created": {"draft": {"id": "e99", "blobId": "b99"}}}, "0"],
+                  ["EmailSubmission/set", {"accountId": "a01",
+                    "created": {"submission": {"id": "s99"}}}, "1"]
+                ], "sessionState": "s-1"}
+                """
+            return (200, Data(body.utf8))
+        }
+
+        let message = OutgoingMessage(
+            to: [EmailAddress(name: "Bob", email: "bob@example.com")],
+            subject: "Hello",
+            textBody: "Hi Bob",
+            inReplyTo: "<orig@example.com>"
+        )
+        let emailId = try await client.send(
+            message, identityId: "ident1", draftsMailboxId: "drafts1", sentMailboxId: "sent1"
+        )
+        XCTAssertEqual(emailId, "e99")
+
+        // The request must batch Email/set + EmailSubmission/set with a
+        // back-reference and the move-to-Sent on success.
+        let bodyData = try XCTUnwrap(MockURLProtocol.lastRequestBody)
+        let request = try JSONDecoder().decode(JSONValue.self, from: bodyData)
+        let calls = try XCTUnwrap(request["methodCalls"].arrayValue)
+        XCTAssertEqual(calls.count, 2)
+        XCTAssertEqual(calls[0][0].stringValue, "Email/set")
+        XCTAssertEqual(calls[1][0].stringValue, "EmailSubmission/set")
+        XCTAssertEqual(
+            calls[1][1]["create"]["submission"]["emailId"].stringValue, "#draft"
+        )
+        let onSuccess = calls[1][1]["onSuccessUpdateEmail"]["#submission"]
+        XCTAssertEqual(onSuccess["mailboxIds/sent1"].boolValue, true)
+        XCTAssertTrue(onSuccess["mailboxIds/drafts1"].isNull)
+        // Reply threading headers made it into the created email:
+        let created = calls[0][1]["create"]["draft"]
+        XCTAssertEqual(created["inReplyTo"][0].stringValue, "<orig@example.com>")
+        XCTAssertEqual(created["references"][0].stringValue, "<orig@example.com>")
+        // Submission capability is negotiated:
+        XCTAssertTrue(
+            (request["using"].stringArray ?? []).contains("urn:ietf:params:jmap:submission")
+        )
+    }
+
+    func testSendSurfacesNotCreated() async throws {
+        try await connect()
+        MockURLProtocol.handler = { _ in
+            let body = """
+                {"methodResponses": [
+                  ["Email/set", {"accountId": "a01", "created": {},
+                    "notCreated": {"draft": {"type": "invalidProperties",
+                                             "description": "no recipients"}}}, "0"],
+                  ["EmailSubmission/set", {"accountId": "a01", "created": {}}, "1"]
+                ], "sessionState": "s-1"}
+                """
+            return (200, Data(body.utf8))
+        }
+        do {
+            _ = try await client.send(
+                OutgoingMessage(subject: "x", textBody: "y"),
+                identityId: "ident1", draftsMailboxId: "d", sentMailboxId: "s"
+            )
+            XCTFail("expected an error")
+        } catch JMAPError.methodError(let type, let description) {
+            XCTAssertEqual(type, "invalidProperties")
+            XCTAssertEqual(description, "no recipients")
+        }
+    }
+
+    func testMoveEmails() async throws {
+        try await connect()
+        respond(
+            method: "Email/set",
+            result: """
+                {"accountId": "a01", "updated": {"m1": null, "m2": null}}
+                """
+        )
+        try await client.moveEmails(ids: ["m1", "m2"], toMailboxId: "archive1")
+
+        let bodyData = try XCTUnwrap(MockURLProtocol.lastRequestBody)
+        let request = try JSONDecoder().decode(JSONValue.self, from: bodyData)
+        let update = request["methodCalls"][0][1]["update"]
+        XCTAssertEqual(update["m1"]["mailboxIds"]["archive1"].boolValue, true)
+        XCTAssertEqual(update["m2"]["mailboxIds"]["archive1"].boolValue, true)
+    }
+
+    func testMoveEmailsSurfacesNotUpdated() async throws {
+        try await connect()
+        respond(
+            method: "Email/set",
+            result: """
+                {"accountId": "a01", "updated": {},
+                 "notUpdated": {"m1": {"type": "notFound"}}}
+                """
+        )
+        do {
+            try await client.moveEmails(ids: ["m1"], toMailboxId: "archive1")
+            XCTFail("expected an error")
+        } catch JMAPError.methodError(let type, _) {
+            XCTAssertEqual(type, "notFound")
         }
     }
 

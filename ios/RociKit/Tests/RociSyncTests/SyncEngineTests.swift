@@ -16,6 +16,12 @@ actor FakeTransport: MailTransport {
     var headersById: [String: MessageHeader] = [:]
     var keywordCalls: [(keyword: String, value: Bool, ids: [String])] = []
     var failNextKeywordCalls = 0
+    var identityList = [Identity(id: "ident1", name: "User", email: "user@example.com")]
+    var sentMessages: [(message: OutgoingMessage, identityId: String)] = []
+    var savedDrafts: [OutgoingMessage] = []
+    var moveCalls: [(ids: [String], to: String)] = []
+    var destroyCalls: [[String]] = []
+    var failNextSends = 0
 
     func seed(
         mailboxes: [Mailbox],
@@ -39,6 +45,10 @@ actor FakeTransport: MailTransport {
 
     func setFailNextKeywordCalls(_ count: Int) {
         failNextKeywordCalls = count
+    }
+
+    func setFailNextSends(_ count: Int) {
+        failNextSends = count
     }
 
     // MARK: - MailTransport
@@ -105,6 +115,37 @@ actor FakeTransport: MailTransport {
         }
         keywordCalls.append((keyword: keyword, value: value, ids: ids))
     }
+
+    func identities() async throws -> [Identity] {
+        identityList
+    }
+
+    func send(
+        _ message: OutgoingMessage,
+        identityId: String,
+        draftsMailboxId: String,
+        sentMailboxId: String
+    ) async throws -> String {
+        if failNextSends > 0 {
+            failNextSends -= 1
+            throw URLError(.notConnectedToInternet)
+        }
+        sentMessages.append((message: message, identityId: identityId))
+        return "sent-\(sentMessages.count)"
+    }
+
+    func saveDraft(_ message: OutgoingMessage, draftsMailboxId: String) async throws -> String {
+        savedDrafts.append(message)
+        return "draft-\(savedDrafts.count)"
+    }
+
+    func moveEmails(ids: [String], toMailboxId: String) async throws {
+        moveCalls.append((ids: ids, to: toMailboxId))
+    }
+
+    func destroyEmails(ids: [String]) async throws {
+        destroyCalls.append(ids)
+    }
 }
 
 final class SyncEngineTests: XCTestCase {
@@ -143,6 +184,8 @@ final class SyncEngineTests: XCTestCase {
         await transport.seed(
             mailboxes: [
                 Mailbox(id: "inbox1", accountId: account.id, name: "Inbox", role: "inbox", sortOrder: 1),
+                Mailbox(id: "drafts1", accountId: account.id, name: "Drafts", role: "drafts", sortOrder: 2),
+                Mailbox(id: "sent1", accountId: account.id, name: "Sent", role: "sent", sortOrder: 3),
                 Mailbox(id: "trash1", accountId: account.id, name: "Trash", role: "trash", sortOrder: 9),
             ],
             inbox: messages
@@ -157,7 +200,7 @@ final class SyncEngineTests: XCTestCase {
         try await engine.initialSync()
 
         let mailboxes = try store.mailboxes(accountId: account.id)
-        XCTAssertEqual(mailboxes.map(\.id), ["inbox1", "trash1"])
+        XCTAssertEqual(mailboxes.map(\.id), ["inbox1", "drafts1", "sent1", "trash1"])
 
         let inbox = try store.messages(accountId: account.id, mailboxId: "inbox1")
         XCTAssertEqual(inbox.map(\.id), ["m2", "m1"], "newest first")
@@ -264,5 +307,115 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertTrue(pending.isEmpty)
         let calls = await transport.keywordCalls
         XCTAssertEqual(calls.count, 1)
+    }
+
+    // MARK: - Sending (M1)
+
+    private var outgoing: OutgoingMessage {
+        OutgoingMessage(
+            to: [EmailAddress(email: "bob@example.com")],
+            subject: "Hello",
+            textBody: "Hi Bob"
+        )
+    }
+
+    func testSendOnline() async throws {
+        await seedServer(messages: [])
+        try await engine.initialSync()
+        _ = try await engine.identities()
+
+        let outcome = try await engine.send(outgoing)
+        XCTAssertEqual(outcome, .sent(emailId: "sent-1"))
+
+        let sent = await transport.sentMessages
+        XCTAssertEqual(sent.count, 1)
+        XCTAssertEqual(sent[0].identityId, "ident1")
+        XCTAssertEqual(sent[0].message.subject, "Hello")
+        XCTAssertTrue(try store.pendingOps(accountId: account.id).isEmpty)
+    }
+
+    func testSendOfflineQueuesAndReplays() async throws {
+        await seedServer(messages: [])
+        try await engine.initialSync()
+        _ = try await engine.identities()
+
+        await transport.setFailNextSends(1)
+        let outcome = try await engine.send(outgoing)
+        XCTAssertEqual(outcome, .queued)
+        XCTAssertEqual(try store.pendingOps(accountId: account.id).count, 1)
+
+        await engine.replayOutbox()
+        let sent = await transport.sentMessages
+        XCTAssertEqual(sent.count, 1, "queued message goes out on replay")
+        XCTAssertEqual(sent[0].message.textBody, "Hi Bob")
+        XCTAssertTrue(try store.pendingOps(accountId: account.id).isEmpty)
+    }
+
+    func testSendWithoutIdentityThrows() async throws {
+        await seedServer(messages: [])
+        try await engine.initialSync()
+        // identities() never called and message has no identityId:
+        do {
+            _ = try await engine.send(outgoing)
+            XCTFail("expected an error")
+        } catch JMAPError.methodError(let type, _) {
+            XCTAssertEqual(type, "noIdentity")
+        }
+        XCTAssertTrue(
+            try store.pendingOps(accountId: account.id).isEmpty,
+            "user-actionable errors are not queued"
+        )
+    }
+
+    func testSaveDraft() async throws {
+        await seedServer(messages: [])
+        try await engine.initialSync()
+        let id = try await engine.saveDraft(outgoing)
+        XCTAssertEqual(id, "draft-1")
+        let drafts = await transport.savedDrafts
+        XCTAssertEqual(drafts.first?.subject, "Hello")
+    }
+
+    // MARK: - Move & delete (M1)
+
+    func testMoveAppliesLocallyAndReplays() async throws {
+        await seedServer(messages: [header(id: "m1", at: 1_000)])
+        try await engine.initialSync()
+
+        await engine.move(messageId: "m1", toMailboxId: "trash1")
+
+        XCTAssertTrue(
+            try store.messages(accountId: account.id, mailboxId: "inbox1").isEmpty,
+            "moved out of the inbox locally"
+        )
+        XCTAssertEqual(
+            try store.messages(accountId: account.id, mailboxId: "trash1").map(\.id),
+            ["m1"]
+        )
+        let moves = await transport.moveCalls
+        XCTAssertEqual(moves.count, 1)
+        XCTAssertEqual(moves[0].ids, ["m1"])
+        XCTAssertEqual(moves[0].to, "trash1")
+    }
+
+    func testDeleteMovesToTrashThenDestroys() async throws {
+        await seedServer(messages: [header(id: "m1", at: 1_000)])
+        try await engine.initialSync()
+        let message = try XCTUnwrap(try store.message(id: "m1", accountId: account.id))
+
+        // First delete: move to Trash.
+        await engine.deleteToTrash(message: message)
+        XCTAssertEqual(
+            try store.messages(accountId: account.id, mailboxId: "trash1").map(\.id),
+            ["m1"]
+        )
+        var destroys = await transport.destroyCalls
+        XCTAssertTrue(destroys.isEmpty)
+
+        // Second delete (from Trash): destroy permanently.
+        await engine.deleteToTrash(message: message)
+        XCTAssertNil(try store.message(id: "m1", accountId: account.id))
+        destroys = await transport.destroyCalls
+        XCTAssertEqual(destroys, [["m1"]])
     }
 }

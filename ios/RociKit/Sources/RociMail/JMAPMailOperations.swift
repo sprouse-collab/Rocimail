@@ -139,6 +139,7 @@ extension JMAPClient {
                         "id", "blobId", "threadId", "mailboxIds", "keywords", "from", "to",
                         "cc", "replyTo", "subject", "receivedAt", "size", "preview",
                         "hasAttachment", "bodyValues", "textBody", "htmlBody", "attachments",
+                        "messageId", "references",
                     ],
                     "fetchHTMLBodyValues": true,
                     "fetchTextBodyValues": true,

@@ -6,7 +6,9 @@ struct MessageDetailView: View {
     @Environment(AppModel.self) private var model
     let messageId: String
 
+    @Environment(\.dismiss) private var dismiss
     @State private var detail: MessageDetail?
+    @State private var composerPrefill: ComposerPrefill?
 
     var body: some View {
         Group {
@@ -18,6 +20,43 @@ struct MessageDetailView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if let detail {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Menu {
+                        Button {
+                            composerPrefill = .reply(to: detail, all: false)
+                        } label: {
+                            Label("Reply", systemImage: "arrowshape.turn.up.left")
+                        }
+                        Button {
+                            composerPrefill = .reply(to: detail, all: true)
+                        } label: {
+                            Label("Reply All", systemImage: "arrowshape.turn.up.left.2")
+                        }
+                        Button {
+                            composerPrefill = .forward(detail)
+                        } label: {
+                            Label("Forward", systemImage: "arrowshape.turn.up.right")
+                        }
+                    } label: {
+                        Image(systemName: "arrowshape.turn.up.left")
+                    }
+
+                    Button(role: .destructive) {
+                        Task {
+                            await model.deleteToTrash(message: detail.header)
+                            dismiss()
+                        }
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                }
+            }
+        }
+        .sheet(item: $composerPrefill) { prefill in
+            ComposerView(prefill: prefill)
+        }
         .task {
             detail = await model.loadDetail(messageId: messageId)
         }

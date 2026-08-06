@@ -106,8 +106,8 @@ public final class MailStore {
             }
 
             // Standalone FTS index, maintained alongside message upserts.
-            // M0 populates subject/sender/preview; bodies land in M1 and
-            // attachment text in M3.
+            // Subject/sender/preview at header time, body text when the body
+            // is cached; attachment text lands in M3.
             try db.create(virtualTable: "messageFts", using: FTS5()) { t in
                 t.tokenizer = .unicode61()
                 t.column("accountId").notIndexed()
@@ -115,6 +115,7 @@ public final class MailStore {
                 t.column("subject")
                 t.column("sender")
                 t.column("preview")
+                t.column("body")
             }
         }
 
@@ -192,6 +193,11 @@ public final class MailStore {
         }
     }
 
+    /// First mailbox with a given special-use role (inbox, sent, drafts, trash…).
+    public func mailbox(role: String, accountId: String) throws -> Mailbox? {
+        try mailboxes(accountId: accountId).first { $0.role == role }
+    }
+
     public func mailboxes(accountId: String) throws -> [Mailbox] {
         try dbQueue.read { db in
             let rows = try Row.fetchAll(
@@ -262,13 +268,16 @@ public final class MailStore {
                 )
                 try db.execute(
                     sql: """
-                        INSERT INTO messageFts (accountId, messageId, subject, sender, preview)
-                        VALUES (?, ?, ?, ?, ?)
+                        INSERT INTO messageFts (accountId, messageId, subject, sender, preview, body)
+                        VALUES (?, ?, ?, ?, ?, COALESCE(
+                            (SELECT text FROM messageBody
+                             WHERE accountId = ? AND messageId = ?), ''))
                         """,
                     arguments: [
                         header.accountId, header.id, header.subject ?? "",
                         header.from.map(\.displayName).joined(separator: " "),
                         header.preview ?? "",
+                        header.accountId, header.id,
                     ]
                 )
             }
@@ -357,6 +366,91 @@ public final class MailStore {
         )
     }
 
+    /// Conversation rows for a mailbox: one row per thread, newest first,
+    /// carrying the latest message plus counts.
+    public func threadSummaries(
+        accountId: String,
+        mailboxId: String,
+        limit: Int = 50,
+        offset: Int = 0
+    ) throws -> [ThreadSummary] {
+        // Threads are small per mailbox window; group the recent page in memory.
+        let recent = try messages(
+            accountId: accountId, mailboxId: mailboxId, limit: limit * 4, offset: 0
+        )
+        var order: [String] = []
+        var grouped: [String: [MessageHeader]] = [:]
+        for header in recent {
+            let key = header.threadId ?? header.id
+            if grouped[key] == nil { order.append(key) }
+            grouped[key, default: []].append(header)
+        }
+        return order.dropFirst(offset).prefix(limit).compactMap { key in
+            guard let members = grouped[key], let latest = members.first else { return nil }
+            return ThreadSummary(
+                latest: latest,
+                messageCount: members.count,
+                unreadCount: members.filter { !$0.isSeen }.count
+            )
+        }
+    }
+
+    /// Every cached message of a thread, across mailboxes, oldest first —
+    /// the conversation view's data.
+    public func messagesInThread(threadId: String, accountId: String) throws -> [MessageHeader] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM message
+                    WHERE accountId = ? AND (threadId = ? OR id = ?)
+                    ORDER BY receivedAt ASC
+                    """,
+                arguments: [accountId, threadId, threadId]
+            )
+            return rows.compactMap(Self.headerFromRow)
+        }
+    }
+
+    /// Newest messages across every account's inbox — the unified inbox.
+    public func unifiedInboxMessages(limit: Int = 50, offset: Int = 0) throws -> [MessageHeader] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT m.* FROM message m
+                    JOIN messageMailbox mm
+                      ON mm.accountId = m.accountId AND mm.messageId = m.id
+                    JOIN mailbox b
+                      ON b.accountId = mm.accountId AND b.id = mm.mailboxId
+                    WHERE b.role = 'inbox'
+                    ORDER BY m.receivedAt DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                arguments: [limit, offset]
+            )
+            return rows.compactMap(Self.headerFromRow)
+        }
+    }
+
+    /// Local move (optimistic UI): the message's placement becomes exactly
+    /// the target mailbox; the outbox replays the same move to the server.
+    public func moveMessageLocally(messageId: String, accountId: String, toMailboxId: String) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "DELETE FROM messageMailbox WHERE accountId = ? AND messageId = ?",
+                arguments: [accountId, messageId]
+            )
+            try db.execute(
+                sql: """
+                    INSERT OR REPLACE INTO messageMailbox (accountId, messageId, mailboxId)
+                    VALUES (?, ?, ?)
+                    """,
+                arguments: [accountId, messageId, toMailboxId]
+            )
+        }
+    }
+
     /// Local flag change (optimistic UI); the outbox replays it to the server.
     public func setFlags(
         messageId: String,
@@ -391,7 +485,32 @@ public final class MailStore {
                     """,
                 arguments: [accountId, messageId, html, text]
             )
+            // Body text joins the search index (plain text preferred; a
+            // crude tag-strip of the HTML otherwise).
+            let indexable = text ?? Self.strippedText(fromHTML: html) ?? ""
+            try db.execute(
+                sql: "UPDATE messageFts SET body = ? WHERE accountId = ? AND messageId = ?",
+                arguments: [indexable, accountId, messageId]
+            )
         }
+    }
+
+    /// Minimal HTML→text for search indexing (not for display).
+    static func strippedText(fromHTML html: String?) -> String? {
+        guard let html else { return nil }
+        var text = html.replacingOccurrences(
+            of: "<(script|style)[^>]*>[\\s\\S]*?</\\1>",
+            with: " ",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        text = text.replacingOccurrences(
+            of: "<[^>]+>", with: " ", options: .regularExpression
+        )
+        text = text.replacingOccurrences(of: "&nbsp;", with: " ")
+        text = text.replacingOccurrences(of: "&amp;", with: "&")
+        text = text.replacingOccurrences(of: "&lt;", with: "<")
+        text = text.replacingOccurrences(of: "&gt;", with: ">")
+        return text
     }
 
     public func body(messageId: String, accountId: String) throws -> (html: String?, text: String?)? {

@@ -68,3 +68,9 @@ interception; the sync engine against a scripted in-memory transport.
 - [x] T4.4 reader v0 (sanitized WKWebView, CSP, link interception)
 - [x] T4.5 app shell (navigation, sign-out)
 - [ ] T5.1 exit review on a physical iPhone
+
+## M1 status
+
+See `docs/M1_TASKS.md`. Slice 1 (compose/send/drafts, move/delete-to-trash,
+threading, body FTS, unified-inbox store support, composer + reply/forward UI)
+is implemented and CI-tested; slices 2 (polish) and 3 (push gateway) are next.

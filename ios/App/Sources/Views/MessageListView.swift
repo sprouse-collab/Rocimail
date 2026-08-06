@@ -1,47 +1,44 @@
 import SwiftUI
 import RociModel
 
-/// T4.3 — the message list: cached-first, newest-first, pull to refresh.
+/// T4.3 / M1 — the conversation list: cached-first, threaded, newest-first,
+/// pull to refresh, swipe to flag or trash.
 struct MessageListView: View {
     @Environment(AppModel.self) private var model
     let mailbox: Mailbox
 
-    @State private var messages: [MessageHeader] = []
+    @State private var threads: [ThreadSummary] = []
     @State private var searchText = ""
 
-    private var shown: [MessageHeader] {
-        searchText.isEmpty ? messages : model.searchLocal(searchText)
-    }
-
     var body: some View {
-        List(shown) { message in
-            NavigationLink(value: message.id) {
-                MessageRow(message: message)
-            }
-            .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                Button {
-                    Task {
-                        await model.toggleFlag(message: message)
-                        reload()
+        List {
+            if searchText.isEmpty {
+                ForEach(threads) { summary in
+                    NavigationLink(value: summary) {
+                        ThreadRow(summary: summary)
                     }
-                } label: {
-                    Label(
-                        message.isFlagged ? "Unflag" : "Flag",
-                        systemImage: message.isFlagged ? "flag.slash.fill" : "flag.fill"
-                    )
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        flagButton(for: summary.latest)
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        trashButton(for: summary)
+                    }
                 }
-                .tint(.orange)
+            } else {
+                // Local FTS search returns flat messages, not threads.
+                ForEach(model.searchLocal(searchText)) { message in
+                    NavigationLink(value: message.id) {
+                        MessageRow(message: message)
+                    }
+                }
             }
         }
         .listStyle(.plain)
         .navigationTitle(mailbox.name)
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "Search cached mail")
-        .navigationDestination(for: String.self) { messageId in
-            MessageDetailView(messageId: messageId)
-        }
         .overlay {
-            if shown.isEmpty {
+            if searchText.isEmpty ? threads.isEmpty : model.searchLocal(searchText).isEmpty {
                 ContentUnavailableView(
                     searchText.isEmpty ? "No Messages" : "No Matches",
                     systemImage: searchText.isEmpty ? "tray" : "magnifyingglass"
@@ -55,7 +52,7 @@ struct MessageListView: View {
         }
         .task {
             reload()
-            if messages.isEmpty {
+            if threads.isEmpty {
                 await model.backfill(mailbox: mailbox)
                 reload()
             }
@@ -63,7 +60,71 @@ struct MessageListView: View {
     }
 
     private func reload() {
-        messages = model.messages(in: mailbox)
+        threads = model.threads(in: mailbox)
+    }
+
+    private func flagButton(for message: MessageHeader) -> some View {
+        Button {
+            Task {
+                await model.toggleFlag(message: message)
+                reload()
+            }
+        } label: {
+            Label(
+                message.isFlagged ? "Unflag" : "Flag",
+                systemImage: message.isFlagged ? "flag.slash.fill" : "flag.fill"
+            )
+        }
+        .tint(.orange)
+    }
+
+    private func trashButton(for summary: ThreadSummary) -> some View {
+        Button(role: .destructive) {
+            Task {
+                for message in model.messagesInThread(summary) {
+                    await model.deleteToTrash(message: message)
+                }
+                reload()
+            }
+        } label: {
+            Label("Trash", systemImage: "trash.fill")
+        }
+    }
+}
+
+/// The messages of one conversation, oldest first.
+struct ThreadView: View {
+    @Environment(AppModel.self) private var model
+    let summary: ThreadSummary
+
+    var body: some View {
+        List(model.messagesInThread(summary)) { message in
+            NavigationLink(value: message.id) {
+                MessageRow(message: message)
+            }
+        }
+        .listStyle(.plain)
+        .navigationTitle(summary.latest.subject ?? "Conversation")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct ThreadRow: View {
+    let summary: ThreadSummary
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            MessageRow(message: summary.latest)
+            if summary.messageCount > 1 {
+                Text("\(summary.messageCount)")
+                    .font(.caption2.bold())
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.quaternary, in: Capsule())
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+            }
+        }
     }
 }
 

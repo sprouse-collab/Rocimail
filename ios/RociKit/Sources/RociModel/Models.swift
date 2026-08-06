@@ -175,6 +175,10 @@ public struct MessageDetail: Codable, Hashable, Sendable {
     public var htmlBody: String?
     public var textBody: String?
     public var attachments: [Attachment]
+    /// RFC 5322 Message-ID(s) of this message, for reply threading.
+    public var rfcMessageIds: [String]
+    /// RFC 5322 References of this message, carried into replies.
+    public var rfcReferences: [String]
 
     public init(
         header: MessageHeader,
@@ -182,7 +186,9 @@ public struct MessageDetail: Codable, Hashable, Sendable {
         replyTo: [EmailAddress] = [],
         htmlBody: String? = nil,
         textBody: String? = nil,
-        attachments: [Attachment] = []
+        attachments: [Attachment] = [],
+        rfcMessageIds: [String] = [],
+        rfcReferences: [String] = []
     ) {
         self.header = header
         self.cc = cc
@@ -190,6 +196,8 @@ public struct MessageDetail: Codable, Hashable, Sendable {
         self.htmlBody = htmlBody
         self.textBody = textBody
         self.attachments = attachments
+        self.rfcMessageIds = rfcMessageIds
+        self.rfcReferences = rfcReferences
     }
 }
 
@@ -213,5 +221,71 @@ public struct ChangeSet: Codable, Hashable, Sendable {
         self.destroyed = destroyed
         self.newState = newState
         self.hasMoreChanges = hasMoreChanges
+    }
+}
+
+/// A sending identity (JMAP Identity object) — the From addresses the
+/// server permits.
+public struct Identity: Codable, Hashable, Identifiable, Sendable {
+    public var id: String
+    public var name: String
+    public var email: String
+
+    public init(id: String, name: String, email: String) {
+        self.id = id
+        self.name = name
+        self.email = email
+    }
+}
+
+/// A message being composed: new, reply, or forward. Plain-text body in M1;
+/// rich text arrives with the M1 composer polish.
+public struct OutgoingMessage: Codable, Hashable, Sendable {
+    public var identityId: String?
+    public var from: EmailAddress?
+    public var to: [EmailAddress]
+    public var cc: [EmailAddress]
+    public var bcc: [EmailAddress]
+    public var subject: String
+    public var textBody: String
+    /// RFC 5322 Message-IDs for reply threading.
+    public var inReplyTo: String?
+    public var references: [String]
+
+    public init(
+        identityId: String? = nil,
+        from: EmailAddress? = nil,
+        to: [EmailAddress] = [],
+        cc: [EmailAddress] = [],
+        bcc: [EmailAddress] = [],
+        subject: String = "",
+        textBody: String = "",
+        inReplyTo: String? = nil,
+        references: [String] = []
+    ) {
+        self.identityId = identityId
+        self.from = from
+        self.to = to
+        self.cc = cc
+        self.bcc = bcc
+        self.subject = subject
+        self.textBody = textBody
+        self.inReplyTo = inReplyTo
+        self.references = references
+    }
+}
+
+/// A conversation row for the message list: the newest message plus counts.
+public struct ThreadSummary: Hashable, Identifiable, Sendable {
+    public var latest: MessageHeader
+    public var messageCount: Int
+    public var unreadCount: Int
+
+    public var id: String { latest.threadId ?? latest.id }
+
+    public init(latest: MessageHeader, messageCount: Int, unreadCount: Int) {
+        self.latest = latest
+        self.messageCount = messageCount
+        self.unreadCount = unreadCount
     }
 }

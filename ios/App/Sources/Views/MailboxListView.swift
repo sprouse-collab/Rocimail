@@ -37,10 +37,30 @@ struct MailboxListView: View {
             .navigationDestination(for: Mailbox.self) { mailbox in
                 MessageListView(mailbox: mailbox)
             }
+            .navigationDestination(for: ThreadSummary.self) { summary in
+                ThreadView(summary: summary)
+            }
+            .navigationDestination(for: String.self) { messageId in
+                MessageDetailView(messageId: messageId)
+            }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        isComposing = true
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                    }
+                }
+            }
+            .sheet(isPresented: $isComposing) {
+                ComposerView()
+            }
             .refreshable { await model.refresh() }
         }
         .tint(Roci.accent)
     }
+
+    @State private var isComposing = false
 
     @ViewBuilder
     private func row(for mailbox: Mailbox, depth: Int) -> some View {

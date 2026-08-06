@@ -110,7 +110,9 @@ enum JMAPMapping {
             replyTo: addresses(from: json["replyTo"]),
             htmlBody: bodyText(for: json["htmlBody"]),
             textBody: bodyText(for: json["textBody"]),
-            attachments: attachments
+            attachments: attachments,
+            rfcMessageIds: json["messageId"].stringArray ?? [],
+            rfcReferences: json["references"].stringArray ?? []
         )
     }
 

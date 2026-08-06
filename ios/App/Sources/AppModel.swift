@@ -143,6 +143,85 @@ final class AppModel {
         await session.engine.setFlagged(!message.isFlagged, messageId: message.id)
     }
 
+    // MARK: - Threads
+
+    func threads(in mailbox: Mailbox) -> [ThreadSummary] {
+        guard let session, let store else { return [] }
+        return (try? store.threadSummaries(
+            accountId: session.account.id, mailboxId: mailbox.id, limit: 100
+        )) ?? []
+    }
+
+    func messagesInThread(_ summary: ThreadSummary) -> [MessageHeader] {
+        guard let session, let store else { return [summary.latest] }
+        guard let threadId = summary.latest.threadId else { return [summary.latest] }
+        let members = (try? store.messagesInThread(
+            threadId: threadId, accountId: session.account.id
+        )) ?? []
+        return members.isEmpty ? [summary.latest] : members
+    }
+
+    // MARK: - Compose & send
+
+    enum SendResult {
+        case success
+        case failure(String)
+    }
+
+    func send(
+        to: String,
+        cc: String,
+        subject: String,
+        body: String,
+        inReplyTo: String?,
+        references: [String]
+    ) async -> SendResult {
+        guard let session else { return .failure("Not signed in.") }
+
+        let toAddresses = Self.parseAddresses(to)
+        guard !toAddresses.isEmpty else {
+            return .failure("Enter at least one valid To address.")
+        }
+
+        do {
+            let identities = try await session.engine.identities()
+            guard let identity = identities.first else {
+                return .failure("The server offers no sending identity for this account.")
+            }
+            let message = OutgoingMessage(
+                identityId: identity.id,
+                from: EmailAddress(name: identity.name, email: identity.email),
+                to: toAddresses,
+                cc: Self.parseAddresses(cc),
+                subject: subject,
+                textBody: body,
+                inReplyTo: inReplyTo,
+                references: references
+            )
+            let outcome = try await session.engine.send(message)
+            if case .queued = outcome {
+                errorMessage = "You're offline — the message is queued and will send automatically."
+            }
+            return .success
+        } catch {
+            return .failure("Could not send. (\(shortDescription(of: error)))")
+        }
+    }
+
+    static func parseAddresses(_ input: String) -> [EmailAddress] {
+        input.split(whereSeparator: { $0 == "," || $0 == ";" })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.contains("@") && $0.count >= 3 }
+            .map { EmailAddress(email: $0) }
+    }
+
+    // MARK: - Delete
+
+    func deleteToTrash(message: MessageHeader) async {
+        guard let session else { return }
+        await session.engine.deleteToTrash(message: message)
+    }
+
     /// Offline-capable local search over the FTS index (subjects, senders,
     /// previews in M0 — bodies and attachments come in M1/M3).
     func searchLocal(_ query: String) -> [MessageHeader] {

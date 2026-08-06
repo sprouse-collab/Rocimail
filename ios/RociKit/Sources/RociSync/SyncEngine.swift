@@ -20,6 +20,16 @@ public protocol MailTransport: Sendable {
     func emailState() async throws -> String
     func emailChanges(since state: String) async throws -> ChangeSet
     func setKeyword(_ keyword: String, to value: Bool, onEmailIds ids: [String]) async throws
+    func identities() async throws -> [Identity]
+    func send(
+        _ message: OutgoingMessage,
+        identityId: String,
+        draftsMailboxId: String,
+        sentMailboxId: String
+    ) async throws -> String
+    func saveDraft(_ message: OutgoingMessage, draftsMailboxId: String) async throws -> String
+    func moveEmails(ids: [String], toMailboxId: String) async throws
+    func destroyEmails(ids: [String]) async throws
 }
 
 extension JMAPClient: MailTransport {}
@@ -35,6 +45,9 @@ public actor SyncEngine {
 
     public enum OpKind {
         public static let setKeyword = "setKeyword"
+        public static let move = "move"
+        public static let send = "send"
+        public static let destroy = "destroy"
     }
 
     private let account: Account
@@ -211,6 +224,157 @@ public actor SyncEngine {
         await replayOutbox()
     }
 
+    // MARK: - Sending
+
+    /// The sending identities the server permits (fetched once per session).
+    private var cachedIdentities: [Identity]?
+
+    public func identities() async throws -> [Identity] {
+        if let cachedIdentities { return cachedIdentities }
+        let fetched = try await transport.identities()
+        cachedIdentities = fetched
+        return fetched
+    }
+
+    public enum SendOutcome: Sendable, Hashable {
+        case sent(emailId: String)
+        /// Offline (or transient server failure): the message is queued in
+        /// the outbox and will send on the next replay.
+        case queued
+    }
+
+    /// Send now if possible; queue for replay when the network says no.
+    /// Auth/method errors (bad recipient, no identity) are NOT queued — they
+    /// need the user, so they throw.
+    public func send(_ message: OutgoingMessage) async throws -> SendOutcome {
+        guard !account.isReadOnly else {
+            throw JMAPError.methodError(
+                type: "forbidden", description: "This account is read-only."
+            )
+        }
+        let context = try sendContext(for: message)
+        do {
+            let emailId = try await transport.send(
+                context.message,
+                identityId: context.identityId,
+                draftsMailboxId: context.draftsId,
+                sentMailboxId: context.sentId
+            )
+            return .sent(emailId: emailId)
+        } catch let error as JMAPError {
+            switch error {
+            case .methodError, .discoveryFailed:
+                throw error // user-actionable; do not queue
+            case .httpError(let status) where (400..<500).contains(status):
+                throw error
+            default:
+                try enqueueSend(context)
+                return .queued
+            }
+        } catch {
+            // Transport-level failure (offline): queue for replay.
+            try enqueueSend(context)
+            return .queued
+        }
+    }
+
+    public func saveDraft(_ message: OutgoingMessage) async throws -> String {
+        let draftsId = try requiredMailboxId(role: "drafts")
+        return try await transport.saveDraft(message, draftsMailboxId: draftsId)
+    }
+
+    private struct SendContext {
+        var message: OutgoingMessage
+        var identityId: String
+        var draftsId: String
+        var sentId: String
+    }
+
+    private func sendContext(for message: OutgoingMessage) throws -> SendContext {
+        guard let identityId = message.identityId ?? cachedIdentities?.first?.id else {
+            throw JMAPError.methodError(
+                type: "noIdentity",
+                description: "No sending identity — call identities() first."
+            )
+        }
+        return SendContext(
+            message: message,
+            identityId: identityId,
+            draftsId: try requiredMailboxId(role: "drafts"),
+            sentId: try requiredMailboxId(role: "sent")
+        )
+    }
+
+    private func requiredMailboxId(role: String) throws -> String {
+        guard let mailbox = try store.mailbox(role: role, accountId: account.id) else {
+            throw JMAPError.methodError(
+                type: "notFound", description: "No \(role) mailbox on this account."
+            )
+        }
+        return mailbox.id
+    }
+
+    private func enqueueSend(_ context: SendContext) throws {
+        let json = String(
+            data: try JSONEncoder().encode(context.message), encoding: .utf8
+        ) ?? "{}"
+        _ = try store.enqueue(
+            accountId: account.id,
+            kind: OpKind.send,
+            payload: [
+                "json": json,
+                "identityId": context.identityId,
+                "draftsId": context.draftsId,
+                "sentId": context.sentId,
+            ]
+        )
+    }
+
+    // MARK: - Move & delete (offline-first via outbox)
+
+    /// Move a message; applies locally at once, replays to the server.
+    public func move(messageId: String, toMailboxId: String) async {
+        try? store.moveMessageLocally(
+            messageId: messageId, accountId: account.id, toMailboxId: toMailboxId
+        )
+        _ = try? store.enqueue(
+            accountId: account.id,
+            kind: OpKind.move,
+            payload: ["ids": messageId, "to": toMailboxId]
+        )
+        await replayOutbox()
+    }
+
+    /// Standard delete: move to Trash. When the message is already in Trash,
+    /// destroy it permanently.
+    public func deleteToTrash(message: MessageHeader) async {
+        guard let trash = try? store.mailbox(role: "trash", accountId: account.id) else { return }
+        let currentlyInTrash = message.mailboxIds.contains(trash.id) || isOnlyInTrash(message)
+        if currentlyInTrash {
+            try? store.deleteMessages(ids: [message.id], accountId: account.id)
+            _ = try? store.enqueue(
+                accountId: account.id,
+                kind: OpKind.destroy,
+                payload: ["ids": message.id]
+            )
+            await replayOutbox()
+        } else {
+            await move(messageId: message.id, toMailboxId: trash.id)
+        }
+    }
+
+    private func isOnlyInTrash(_ message: MessageHeader) -> Bool {
+        // Headers loaded from the store don't carry mailbox ids; check the
+        // junction table via the store's mailbox-scoped listing instead.
+        guard let trash = try? store.mailbox(role: "trash", accountId: account.id) else {
+            return false
+        }
+        let inTrash = (try? store.messages(
+            accountId: account.id, mailboxId: trash.id, limit: 500
+        )) ?? []
+        return inTrash.contains { $0.id == message.id }
+    }
+
     /// Replay pending local mutations in order. Stops at the first failure
     /// (likely offline) — ops stay queued for the next attempt.
     public func replayOutbox() async {
@@ -237,6 +401,32 @@ public actor SyncEngine {
                 keyword,
                 to: value == "1",
                 onEmailIds: ids.split(separator: ",").map(String.init)
+            )
+        case OpKind.move:
+            guard let ids = op.payload["ids"], let to = op.payload["to"] else { return }
+            try await transport.moveEmails(
+                ids: ids.split(separator: ",").map(String.init),
+                toMailboxId: to
+            )
+        case OpKind.destroy:
+            guard let ids = op.payload["ids"] else { return }
+            try await transport.destroyEmails(
+                ids: ids.split(separator: ",").map(String.init)
+            )
+        case OpKind.send:
+            guard let json = op.payload["json"],
+                  let identityId = op.payload["identityId"],
+                  let draftsId = op.payload["draftsId"],
+                  let sentId = op.payload["sentId"],
+                  let message = try? JSONDecoder().decode(
+                      OutgoingMessage.self, from: Data(json.utf8)
+                  )
+            else { return }
+            _ = try await transport.send(
+                message,
+                identityId: identityId,
+                draftsMailboxId: draftsId,
+                sentMailboxId: sentId
             )
         default:
             return // unknown op kind (from a newer schema): drop
