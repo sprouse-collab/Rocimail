@@ -1,0 +1,402 @@
+:root {
+  --accent: #d83a34;
+  --accent-dark: #b92c27;
+  --bg: #12151b;
+  --panel: #1a1e27;
+  --panel-2: #222734;
+  --border: #2c3242;
+  --text: #e6e9ef;
+  --text-soft: #9aa3b2;
+  --ok: #3fb26f;
+  --warn: #e0a63a;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+.hidden { display: none !important; }
+
+/* ---- Alarm banner ---------------------------------------------------------- */
+
+.alarm-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 12px;
+  animation: banner-flash 1s steps(2) infinite;
+}
+
+@keyframes banner-flash {
+  0% { background: var(--accent); }
+  50% { background: #7d1713; }
+}
+
+.alarm-banner button {
+  background: #fff;
+  color: var(--accent-dark);
+  border: none;
+  border-radius: 6px;
+  font-weight: 700;
+  padding: 6px 16px;
+}
+
+/* ---- Topbar ---------------------------------------------------------------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 12px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand { display: flex; align-items: center; gap: 10px; }
+
+.brand-mark {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
+.brand-text { font-size: 17px; font-weight: 700; }
+
+.topbar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+}
+
+.btn:hover { border-color: var(--text-soft); }
+.btn.subtle { color: var(--text-soft); }
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.btn.primary:hover { background: var(--accent-dark); }
+
+.arm-btn {
+  border: 1px solid var(--ok);
+  color: var(--ok);
+  background: transparent;
+  border-radius: 8px;
+  padding: 8px 18px;
+  font-weight: 700;
+}
+
+.arm-btn.armed {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  animation: armed-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes armed-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(216, 58, 52, 0.5); }
+  50% { box-shadow: 0 0 0 8px rgba(216, 58, 52, 0); }
+}
+
+.ffmpeg-warning {
+  background: var(--warn);
+  color: #201a05;
+  padding: 8px 20px;
+  font-weight: 600;
+}
+
+/* ---- Layout ---------------------------------------------------------------- */
+
+.layout {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.camera-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 16px;
+  padding: 16px 20px;
+  overflow-y: auto;
+  align-content: start;
+}
+
+.camera-empty {
+  color: var(--text-soft);
+  padding: 40px;
+  text-align: center;
+  grid-column: 1 / -1;
+}
+
+.camera-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.camera-card.alerting { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(216,58,52,.35); }
+
+.camera-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.camera-name { font-weight: 600; }
+
+.camera-badge {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-radius: 10px;
+  padding: 3px 9px;
+}
+
+.camera-badge.online { background: rgba(63, 178, 111, 0.15); color: var(--ok); }
+.camera-badge.offline { background: rgba(224, 166, 58, 0.15); color: var(--warn); }
+
+.camera-chip {
+  font-size: 11px;
+  color: var(--text-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 2px 8px;
+}
+
+.camera-actions { margin-left: auto; display: flex; gap: 6px; }
+
+.camera-actions button {
+  background: none;
+  border: none;
+  color: var(--text-soft);
+  font-size: 14px;
+  padding: 2px 5px;
+}
+
+.camera-actions button:hover { color: var(--text); }
+
+.camera-video {
+  aspect-ratio: 16 / 9;
+  background: #000;
+  position: relative;
+}
+
+.camera-video img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.camera-offline-note {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-soft);
+  font-size: 13px;
+  padding: 14px;
+  text-align: center;
+}
+
+/* ---- Events ---------------------------------------------------------------- */
+
+.events-pane {
+  width: 340px;
+  flex-shrink: 0;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.events-header {
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.events-header h2 { margin: 0 0 10px; font-size: 15px; }
+
+.events-filters { display: flex; gap: 6px; }
+
+.filter {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text-soft);
+  border-radius: 12px;
+  font-size: 12px;
+  padding: 3px 12px;
+}
+
+.filter.active {
+  border-color: var(--accent);
+  color: #fff;
+  background: rgba(216, 58, 52, 0.2);
+}
+
+.event-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.event-item {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.event-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+
+.event-item.info .event-dot { background: var(--text-soft); }
+.event-item.warning .event-dot { background: var(--warn); }
+.event-item.alarm .event-dot { background: var(--accent); }
+.event-item.alarm .event-message { color: #ff8a85; font-weight: 600; }
+
+.event-message { line-height: 1.35; }
+.event-meta { color: var(--text-soft); font-size: 12px; margin-top: 2px; }
+
+.event-empty { padding: 24px 16px; color: var(--text-soft); }
+
+/* ---- Modal ----------------------------------------------------------------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+}
+
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  padding: 18px 22px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal-header h3 { margin: 0; font-size: 16px; }
+
+.close-btn {
+  background: none;
+  border: none;
+  color: var(--text-soft);
+  font-size: 20px;
+}
+
+.modal label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.modal input[type='text'],
+.modal select {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 9px 10px;
+}
+
+.modal input:focus, .modal select:focus { outline: none; border-color: var(--accent); }
+
+.modal .check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.hint { margin: 0; font-size: 12.5px; color: var(--text-soft); line-height: 1.4; }
+
+.form-error {
+  background: rgba(216, 58, 52, 0.12);
+  border: 1px solid var(--accent);
+  color: #ff8a85;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.modal-footer { display: flex; gap: 10px; margin-top: 4px; }
+
+@media (max-width: 900px) {
+  .layout { flex-direction: column; overflow-y: auto; }
+  .events-pane { width: auto; border-left: none; border-top: 1px solid var(--border); max-height: 45vh; }
+  .camera-grid { overflow: visible; }
+}

@@ -1,5 +1,6 @@
 import type {
   AccountInfo,
+  Alarm,
   EmailAddress,
   MailboxInfo,
   MessageDetail,
@@ -145,6 +146,34 @@ export const api = {
     return request<{ ok: boolean }>(`/accounts/${accountId}/send`, {
       method: 'POST',
       body: JSON.stringify(payload),
+    });
+  },
+  listAlarms() {
+    return request<{ alarms: Alarm[] }>('/alarms');
+  },
+  createAlarm(payload: {
+    accountId: string;
+    mailboxId: string;
+    messageId: string;
+    dueAt: string;
+    note?: string;
+    subject: string;
+    from: EmailAddress[];
+  }) {
+    return request<{ alarm: Alarm }>('/alarms', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+  updateAlarm(alarmId: string, payload: { dueAt?: string; note?: string | null }) {
+    return request<{ alarm: Alarm }>(`/alarms/${encodeURIComponent(alarmId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteAlarm(alarmId: string) {
+    return request<{ ok: boolean }>(`/alarms/${encodeURIComponent(alarmId)}`, {
+      method: 'DELETE',
     });
   },
   attachmentUrl(accountId: string, mailboxId: string, messageId: string, attachmentId: string, name: string) {

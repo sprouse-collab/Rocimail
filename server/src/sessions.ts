@@ -2,7 +2,7 @@
 // plus any number of secondary IMAP accounts. Sessions expire after idling.
 
 import { randomBytes } from 'node:crypto';
-import { AccountInfo, ApiError, MailProvider } from './types.js';
+import { AccountInfo, Alarm, ApiError, MailProvider } from './types.js';
 
 export interface SessionAccount {
   info: AccountInfo;
@@ -12,6 +12,7 @@ export interface SessionAccount {
 export interface Session {
   token: string;
   accounts: Map<string, SessionAccount>;
+  alarms: Map<string, Alarm>;
   lastUsed: number;
 }
 
@@ -28,7 +29,7 @@ class SessionStore {
 
   create(): Session {
     const token = randomBytes(32).toString('base64url');
-    const session: Session = { token, accounts: new Map(), lastUsed: Date.now() };
+    const session: Session = { token, accounts: new Map(), alarms: new Map(), lastUsed: Date.now() };
     this.sessions.set(token, session);
     return session;
   }
@@ -50,6 +51,10 @@ class SessionStore {
   }
 
   newAccountId(): string {
+    return randomBytes(8).toString('hex');
+  }
+
+  newAlarmId(): string {
     return randomBytes(8).toString('hex');
   }
 

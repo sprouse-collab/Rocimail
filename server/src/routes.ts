@@ -2,7 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { JmapProvider } from './jmap.js';
 import { ImapProvider, type ImapAccountConfig } from './imap.js';
 import { sessionStore, getAccount, type Session } from './sessions.js';
-import { ApiError, type EmailAddress, type OutgoingMessage } from './types.js';
+import { ApiError, type Alarm, type EmailAddress, type OutgoingMessage } from './types.js';
 
 type Handler = (req: Request, res: Response) => Promise<void> | void;
 
@@ -35,6 +35,17 @@ function parseAddressList(value: unknown): EmailAddress[] {
   return value
     .filter((a): a is { email: string; name?: string } => Boolean(a) && typeof a.email === 'string' && a.email.includes('@'))
     .map((a) => ({ email: a.email.trim(), name: typeof a.name === 'string' && a.name.trim() !== '' ? a.name.trim() : undefined }));
+}
+
+function parseDueAt(value: unknown): string {
+  const parsed = typeof value === 'string' ? Date.parse(value) : NaN;
+  if (Number.isNaN(parsed)) {
+    throw new ApiError(400, 'dueAt must be a valid ISO 8601 date-time');
+  }
+  if (parsed <= Date.now()) {
+    throw new ApiError(400, 'dueAt must be in the future');
+  }
+  return new Date(parsed).toISOString();
 }
 
 function parseIdList(value: unknown): string[] {
@@ -126,6 +137,9 @@ export function createRouter(): Router {
         throw new ApiError(400, 'The primary account cannot be removed; sign out instead');
       }
       session.accounts.delete(accountId);
+      for (const [alarmId, alarm] of session.alarms) {
+        if (alarm.accountId === accountId) session.alarms.delete(alarmId);
+      }
       await account.provider.close();
       res.json({ ok: true });
     })
@@ -221,6 +235,76 @@ export function createRouter(): Router {
       res.setHeader('Content-Type', att.type);
       res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
       res.send(att.content);
+    })
+  );
+
+  // ---- Alarms ---------------------------------------------------------------
+
+  router.get(
+    '/alarms',
+    wrap((req, res) => {
+      const session = requireSession(req);
+      const alarms = [...session.alarms.values()].sort(
+        (a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt)
+      );
+      res.json({ alarms });
+    })
+  );
+
+  router.post(
+    '/alarms',
+    wrap((req, res) => {
+      const session = requireSession(req);
+      const body = req.body ?? {};
+      const accountId = requireString(body, 'accountId');
+      getAccount(session, accountId);
+      const messageId = requireString(body, 'messageId');
+      const alarm: Alarm = {
+        id: sessionStore.newAlarmId(),
+        accountId,
+        mailboxId: requireString(body, 'mailboxId'),
+        messageId,
+        dueAt: parseDueAt(body.dueAt),
+        note: typeof body.note === 'string' && body.note.trim() !== '' ? body.note.trim() : undefined,
+        subject: typeof body.subject === 'string' ? body.subject : '',
+        from: parseAddressList(body.from),
+        createdAt: new Date().toISOString(),
+      };
+      // One alarm per message: setting a new one replaces the old.
+      for (const [id, existing] of session.alarms) {
+        if (existing.accountId === accountId && existing.messageId === messageId) {
+          session.alarms.delete(id);
+        }
+      }
+      session.alarms.set(alarm.id, alarm);
+      res.status(201).json({ alarm });
+    })
+  );
+
+  router.patch(
+    '/alarms/:alarmId',
+    wrap((req, res) => {
+      const session = requireSession(req);
+      const alarm = session.alarms.get(req.params.alarmId);
+      if (!alarm) throw new ApiError(404, 'Alarm not found');
+      const body = req.body ?? {};
+      if (body.dueAt !== undefined) alarm.dueAt = parseDueAt(body.dueAt);
+      if (body.note !== undefined) {
+        alarm.note =
+          typeof body.note === 'string' && body.note.trim() !== '' ? body.note.trim() : undefined;
+      }
+      res.json({ alarm });
+    })
+  );
+
+  router.delete(
+    '/alarms/:alarmId',
+    wrap((req, res) => {
+      const session = requireSession(req);
+      if (!session.alarms.delete(req.params.alarmId)) {
+        throw new ApiError(404, 'Alarm not found');
+      }
+      res.json({ ok: true });
     })
   );
 

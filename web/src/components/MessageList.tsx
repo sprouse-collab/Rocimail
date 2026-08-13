@@ -9,11 +9,13 @@ interface Props {
   searchActive: boolean;
   offset: number;
   limit: number;
+  alarmedIds: Set<string>;
   onSelect: (message: MessageSummary) => void;
   onPage: (offset: number) => void;
   onRefresh: () => void;
   onToggleFlag: (message: MessageSummary) => void;
   onDelete: (message: MessageSummary) => void;
+  onSetAlarm: (message: MessageSummary) => void;
 }
 
 function senderLabel(msg: MessageSummary): string {
@@ -46,11 +48,13 @@ export default function MessageList({
   searchActive,
   offset,
   limit,
+  alarmedIds,
   onSelect,
   onPage,
   onRefresh,
   onToggleFlag,
   onDelete,
+  onSetAlarm,
 }: Props) {
   const total = page?.total ?? 0;
   const from = total === 0 ? 0 : offset + 1;
@@ -115,6 +119,16 @@ export default function MessageList({
             <div className="message-row-meta">
               {msg.hasAttachment && <span title="Has attachment">📎</span>}
               {msg.answered && <span title="Replied">↩</span>}
+              <button
+                className={`row-action alarm ${alarmedIds.has(msg.id) ? 'on' : ''}`}
+                title={alarmedIds.has(msg.id) ? 'Edit alarm' : 'Set alarm'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSetAlarm(msg);
+                }}
+              >
+                ⏰
+              </button>
               <button
                 className={`row-action flag ${msg.flagged ? 'on' : ''}`}
                 title={msg.flagged ? 'Remove flag' : 'Flag'}

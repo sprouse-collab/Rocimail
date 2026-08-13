@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, formatAddress, getToken, setToken, setUnauthorizedHandler } from './api';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
@@ -6,8 +6,12 @@ import MessageList from './components/MessageList';
 import MessageView from './components/MessageView';
 import Composer from './components/Composer';
 import AddAccountModal from './components/AddAccountModal';
+import AlarmBell from './components/AlarmBell';
+import AlarmModal, { type AlarmTarget } from './components/AlarmModal';
+import { playChime, showBrowserNotification } from './notify';
 import type {
   AccountInfo,
+  Alarm,
   ComposerDraft,
   MailboxInfo,
   MessageDetail,
@@ -35,8 +39,12 @@ export default function App() {
   const [composerDraft, setComposerDraft] = useState<ComposerDraft | null>(null);
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [alarms, setAlarms] = useState<Alarm[]>([]);
+  const [alarmTarget, setAlarmTarget] = useState<AlarmTarget | null>(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
 
   const selectionRef = useRef({ accountId: '', mailboxId: '', offset: 0, query: '' });
+  const notifiedAlarmsRef = useRef(new Set<string>());
 
   const showToast = useCallback((text: string) => {
     setToast(text);
@@ -66,6 +74,15 @@ export default function App() {
     const allBoxes = await Promise.all(list.map((a) => loadMailboxes(a.id)));
     return { list, allBoxes };
   }, [loadMailboxes]);
+
+  const loadAlarms = useCallback(async () => {
+    try {
+      const { alarms: list } = await api.listAlarms();
+      setAlarms(list);
+    } catch {
+      /* non-fatal: retried on the next refresh */
+    }
+  }, []);
 
   const loadMessages = useCallback(
     async (accountId: string, mailboxId: string, newOffset: number, query: string, silent = false) => {
@@ -110,6 +127,7 @@ export default function App() {
   // Initial load after sign-in.
   useEffect(() => {
     if (!authed) return;
+    void loadAlarms();
     (async () => {
       try {
         const { list, allBoxes } = await loadAccounts();
@@ -131,11 +149,79 @@ export default function App() {
     if (!authed) return;
     const timer = window.setInterval(() => {
       for (const account of accounts) void loadMailboxes(account.id);
+      void loadAlarms();
       const { accountId, mailboxId, offset: o, query } = selectionRef.current;
       if (accountId && mailboxId) void loadMessages(accountId, mailboxId, o, query, true);
     }, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [authed, accounts, loadMailboxes, loadMessages]);
+  }, [authed, accounts, loadMailboxes, loadMessages, loadAlarms]);
+
+  // ---- Alarm clock: tick so due alarms are detected close to on-time. ------
+  useEffect(() => {
+    if (!authed) return;
+    const timer = window.setInterval(() => setNowTick(Date.now()), 15_000);
+    return () => window.clearInterval(timer);
+  }, [authed]);
+
+  useEffect(() => {
+    const next = alarms
+      .map((a) => Date.parse(a.dueAt))
+      .filter((t) => t > nowTick)
+      .sort((a, b) => a - b)[0];
+    if (next === undefined) return;
+    const delay = Math.min(Math.max(next - Date.now(), 0) + 250, 60_000);
+    const timer = window.setTimeout(() => setNowTick(Date.now()), delay);
+    return () => window.clearTimeout(timer);
+  }, [alarms, nowTick]);
+
+  const dueAlarmIds = useMemo(
+    () => new Set(alarms.filter((a) => Date.parse(a.dueAt) <= nowTick).map((a) => a.id)),
+    [alarms, nowTick]
+  );
+
+  // Ring alarms that just became due: chime + desktop notification + toast.
+  useEffect(() => {
+    const fresh = alarms.filter(
+      (a) => dueAlarmIds.has(a.id) && !notifiedAlarmsRef.current.has(a.id)
+    );
+    if (fresh.length === 0) return;
+    for (const alarm of fresh) {
+      notifiedAlarmsRef.current.add(alarm.id);
+      showBrowserNotification(
+        '⏰ Rocimail alarm',
+        `${alarm.subject || '(no subject)'}${alarm.note ? ` — ${alarm.note}` : ''}`
+      );
+    }
+    playChime();
+    showToast(`⏰ Alarm: ${fresh[0].subject || '(no subject)'}`);
+  }, [alarms, dueAlarmIds, showToast]);
+
+  const snoozeAlarm = useCallback(
+    async (alarm: Alarm, until: Date) => {
+      try {
+        const { alarm: updated } = await api.updateAlarm(alarm.id, { dueAt: until.toISOString() });
+        notifiedAlarmsRef.current.delete(alarm.id);
+        setAlarms((prev) =>
+          prev
+            .map((a) => (a.id === alarm.id ? updated : a))
+            .sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt))
+        );
+      } catch (err) {
+        showToast((err as Error).message);
+      }
+    },
+    [showToast]
+  );
+
+  const dismissAlarm = useCallback(async (alarm: Alarm) => {
+    try {
+      await api.deleteAlarm(alarm.id);
+    } catch {
+      /* already gone server-side — still drop it locally */
+    }
+    notifiedAlarmsRef.current.delete(alarm.id);
+    setAlarms((prev) => prev.filter((a) => a.id !== alarm.id));
+  }, []);
 
   const refreshCurrent = useCallback(() => {
     const { accountId, mailboxId, offset: o, query } = selectionRef.current;
@@ -144,6 +230,42 @@ export default function App() {
       void loadMailboxes(accountId);
     }
   }, [loadMessages, loadMailboxes]);
+
+  const openAlarm = useCallback(
+    async (alarm: Alarm) => {
+      if (!accounts.some((a) => a.id === alarm.accountId)) {
+        showToast('The account for this alarm is no longer connected');
+        return;
+      }
+      if (selectedAccountId !== alarm.accountId || selectedMailboxId !== alarm.mailboxId) {
+        selectMailbox(alarm.accountId, alarm.mailboxId);
+      }
+      setMessageLoading(true);
+      try {
+        const { message } = await api.getMessage(alarm.accountId, alarm.mailboxId, alarm.messageId);
+        setSelectedMessage(message);
+      } catch {
+        showToast('The message for this alarm is no longer available');
+      } finally {
+        setMessageLoading(false);
+      }
+    },
+    [accounts, selectedAccountId, selectedMailboxId, selectMailbox, showToast]
+  );
+
+  const openAlarmModal = useCallback(
+    (msg: MessageSummary, mailboxId: string) => {
+      if (!selectedAccountId) return;
+      setAlarmTarget({
+        accountId: selectedAccountId,
+        mailboxId: msg.mailboxId || mailboxId,
+        messageId: msg.id,
+        subject: msg.subject,
+        from: msg.from,
+      });
+    },
+    [selectedAccountId]
+  );
 
   const selectMessage = useCallback(
     async (msg: MessageSummary) => {
@@ -328,6 +450,9 @@ export default function App() {
     setSelectedMailboxId(null);
     setPage(null);
     setSelectedMessage(null);
+    setAlarms([]);
+    setAlarmTarget(null);
+    notifiedAlarmsRef.current.clear();
   }, []);
 
   const removeAccount = useCallback(
@@ -404,6 +529,13 @@ export default function App() {
           )}
         </div>
         <div className="topbar-right">
+          <AlarmBell
+            alarms={alarms}
+            dueIds={dueAlarmIds}
+            onOpen={(alarm) => void openAlarm(alarm)}
+            onSnooze={(alarm, until) => void snoozeAlarm(alarm, until)}
+            onDismiss={(alarm) => void dismissAlarm(alarm)}
+          />
           <span className="topbar-user" title={primaryAccount?.email}>
             {primaryAccount?.email}
           </span>
@@ -438,20 +570,36 @@ export default function App() {
               void loadMessages(selectedAccountId, selectedMailboxId, newOffset, activeQuery);
             }
           }}
+          alarmedIds={
+            new Set(
+              alarms.filter((a) => a.accountId === selectedAccountId).map((a) => a.messageId)
+            )
+          }
           onRefresh={refreshCurrent}
           onToggleFlag={(m) => void toggleFlag(m)}
           onDelete={(m) => void deleteMessages([m.id])}
+          onSetAlarm={(m) => openAlarmModal(m, selectedMailboxId ?? '')}
         />
         <MessageView
           accountId={selectedAccountId ?? ''}
           message={selectedMessage}
           loading={messageLoading}
           mailboxes={currentBoxes}
+          alarm={
+            selectedMessage
+              ? (alarms.find(
+                  (a) => a.accountId === selectedAccountId && a.messageId === selectedMessage.id
+                ) ?? null)
+              : null
+          }
           onReply={(mode) => openCompose(mode)}
           onDelete={() => selectedMessage && void deleteMessages([selectedMessage.id])}
           onToggleSeen={() => void toggleSeen()}
           onToggleFlag={() => selectedMessage && void toggleFlag(selectedMessage)}
           onMove={(target) => void moveMessage(target)}
+          onSetAlarm={() =>
+            selectedMessage && openAlarmModal(selectedMessage, selectedMessage.mailboxId)
+          }
         />
       </div>
       {composerDraft && (
@@ -463,6 +611,36 @@ export default function App() {
             setComposerDraft(null);
             showToast('Message sent');
             void loadMailboxes(accountId);
+          }}
+        />
+      )}
+      {alarmTarget && (
+        <AlarmModal
+          target={alarmTarget}
+          existing={
+            alarms.find(
+              (a) =>
+                a.accountId === alarmTarget.accountId && a.messageId === alarmTarget.messageId
+            ) ?? null
+          }
+          onClose={() => setAlarmTarget(null)}
+          onSaved={(alarm) => {
+            setAlarmTarget(null);
+            setAlarms((prev) =>
+              [
+                ...prev.filter(
+                  (a) => !(a.accountId === alarm.accountId && a.messageId === alarm.messageId)
+                ),
+                alarm,
+              ].sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt))
+            );
+            showToast(`Alarm set for ${new Date(alarm.dueAt).toLocaleString()}`);
+          }}
+          onRemoved={(alarmId) => {
+            setAlarmTarget(null);
+            notifiedAlarmsRef.current.delete(alarmId);
+            setAlarms((prev) => prev.filter((a) => a.id !== alarmId));
+            showToast('Alarm removed');
           }}
         />
       )}

@@ -75,6 +75,18 @@ export interface AccountInfo {
   primary: boolean;
 }
 
+export interface Alarm {
+  id: string;
+  accountId: string;
+  mailboxId: string;
+  messageId: string;
+  dueAt: string;
+  note?: string;
+  subject: string;
+  from: EmailAddress[];
+  createdAt: string;
+}
+
 export interface ComposerDraft {
   accountId: string;
   to: string;

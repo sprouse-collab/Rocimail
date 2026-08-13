@@ -6,3 +6,5 @@ dist/
 !.env.example
 .DS_Store
 stalwart-data/
+alarm-dashboard/config.json
+alarm-dashboard/events.jsonl

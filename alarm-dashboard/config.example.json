@@ -1,0 +1,8 @@
+{
+  "armed": false,
+  "cameras": [
+    { "id": "demo", "name": "Demo camera", "type": "demo", "source": "", "motion": true },
+    { "id": "front", "name": "Front door (USB webcam)", "type": "usb", "source": "/dev/video0", "motion": true },
+    { "id": "yard", "name": "Yard (RTSP)", "type": "rtsp", "source": "rtsp://user:pass@192.168.1.50:554/stream1", "motion": false }
+  ]
+}

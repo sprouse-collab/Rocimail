@@ -91,6 +91,24 @@ export interface AttachmentContent {
   content: Buffer;
 }
 
+/**
+ * A reminder attached to a message. Alarms live in the session (like accounts):
+ * the server stores and validates them, the client rings them when due.
+ */
+export interface Alarm {
+  id: string;
+  accountId: string;
+  mailboxId: string;
+  messageId: string;
+  /** When the alarm should ring (ISO 8601). */
+  dueAt: string;
+  note?: string;
+  /** Snapshot of the message so the alarm can be listed without refetching it. */
+  subject: string;
+  from: EmailAddress[];
+  createdAt: string;
+}
+
 /** Common interface implemented by the JMAP (Stalwart) and IMAP providers. */
 export interface MailProvider {
   readonly kind: 'jmap' | 'imap';
