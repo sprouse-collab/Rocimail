@@ -104,9 +104,27 @@ options:
 - **Motion detection** (per camera) uses ffmpeg scene-change analysis inside the same
   process as the live stream, so a USB device is never opened twice. Motion logs a
   warning when disarmed and **rings an alarm when armed**.
-- **Webhook**: `POST /api/events` with `{"message": "Back door opened",
-  "level": "alarm", "source": "door-sensor"}` — lets alarm panels, home-automation
-  rules, or scripts feed the dashboard.
+- **Webhook**: `POST /api/events` — lets alarm panels, home-automation rules, or
+  scripts feed the dashboard. Accepts JSON (`{"message": "...", "level":
+  "info|warning|alarm", "source": "..."}`), notification-forwarder JSON
+  (`{"title": "...", "text": "..."}`), or a plain-text body; when no level is
+  given, one is classified from the text (e.g. “alarm/smoke/intrusion” → alarm,
+  “motion/opened/doorbell” → warning). Set `ALARM_DASH_WEBHOOK_TOKEN` and callers
+  can authenticate with `?token=…` or an `X-Webhook-Token` header even when the
+  dashboard itself is password-protected.
+- **Telus / Alarm.com notifications** can be fed in two ways (their platform has
+  no public API, and camera video stays locked to their app — see the note below):
+  1. *Phone bridge*: on Android, a notification-forwarder app (MacroDroid, Tasker)
+     can catch the Telus app's push notifications and POST them to the webhook
+     above — alarms then ring on this dashboard in near real time.
+  2. *Mail bridge*: configure the Telus/Alarm.com app to send email alerts, give
+     the dashboard IMAP access to that mailbox, and matching emails become events
+     automatically. Enable by setting `ALARM_DASH_MAIL_HOST`, `ALARM_DASH_MAIL_USER`
+     and `ALARM_DASH_MAIL_PASSWORD` (optional: `ALARM_DASH_MAIL_PORT` 993,
+     `ALARM_DASH_MAIL_SECURE`, `ALARM_DASH_MAIL_FOLDER` INBOX,
+     `ALARM_DASH_MAIL_FROM` "alarm.com,telus", `ALARM_DASH_MAIL_POLL_SECONDS` 60).
+     Unseen mail from matching senders is turned into an event (severity classified
+     from the subject) and marked read.
 - **Optional password**: set `ALARM_DASH_PASSWORD` (and optionally `ALARM_DASH_USER`)
   to require HTTP Basic auth. `ALARM_DASH_PORT` / `ALARM_DASH_HOST` override the bind.
 

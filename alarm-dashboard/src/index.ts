@@ -6,16 +6,20 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import os from 'node:os';
 import path from 'node:path';
+import { timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, saveConfig, newId } from './config.js';
 import { CameraStream, ffmpegAvailable } from './cameras.js';
 import { EventBus } from './events.js';
+import { MailBridge, mailBridgeConfigFromEnv } from './mailbridge.js';
+import { classifyLevel } from './classify.js';
 import type { CameraConfig, CameraType, EventLevel } from './types.js';
 
 const PORT = Number(process.env.ALARM_DASH_PORT) || 4100;
 const HOST = process.env.ALARM_DASH_HOST || '0.0.0.0';
 const AUTH_USER = process.env.ALARM_DASH_USER || '';
 const AUTH_PASSWORD = process.env.ALARM_DASH_PASSWORD || '';
+const WEBHOOK_TOKEN = process.env.ALARM_DASH_WEBHOOK_TOKEN || '';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -61,17 +65,46 @@ if (hasFfmpeg) {
   }
 }
 
+const mailBridgeConfig = mailBridgeConfigFromEnv();
+const mailBridge = mailBridgeConfig ? new MailBridge(mailBridgeConfig, events) : null;
+if (mailBridge) {
+  console.log(
+    `Mail bridge: watching ${mailBridgeConfig!.user} on ${mailBridgeConfig!.host} ` +
+      `for alerts from [${mailBridgeConfig!.from.join(', ')}]`
+  );
+}
+
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '1mb' }));
+app.use(express.text({ type: 'text/*', limit: '64kb' }));
+
+function safeEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  return bufA.length === bufB.length && timingSafeEqual(bufA, bufB);
+}
+
+// Notification forwarders (Tasker/MacroDroid relaying the Telus app, sensor
+// scripts, …) often can't do Basic auth, so the webhook also accepts a token
+// via header or query string.
+function hasWebhookToken(req: Request): boolean {
+  if (WEBHOOK_TOKEN === '') return false;
+  const supplied = String(req.headers['x-webhook-token'] ?? req.query.token ?? '');
+  return supplied !== '' && safeEqual(supplied, WEBHOOK_TOKEN);
+}
 
 // Optional HTTP Basic auth for the whole dashboard (set ALARM_DASH_USER/PASSWORD).
 if (AUTH_PASSWORD !== '') {
   app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.method === 'POST' && req.path === '/api/events' && hasWebhookToken(req)) {
+      next();
+      return;
+    }
     const header = req.headers.authorization ?? '';
     if (header.startsWith('Basic ')) {
       const [user, ...rest] = Buffer.from(header.slice(6), 'base64').toString().split(':');
-      if ((AUTH_USER === '' || user === AUTH_USER) && rest.join(':') === AUTH_PASSWORD) {
+      if ((AUTH_USER === '' || safeEqual(user, AUTH_USER)) && safeEqual(rest.join(':'), AUTH_PASSWORD)) {
         next();
         return;
       }
@@ -89,6 +122,7 @@ app.get('/api/state', (_req, res) => {
   res.json({
     armed: config.armed,
     ffmpegAvailable: hasFfmpeg,
+    mailBridge: mailBridge ? mailBridge.status : null,
     cameras: config.cameras.map((c) => streams.get(c.id)?.status() ?? {
       ...c,
       online: false,
@@ -126,23 +160,42 @@ app.get('/api/events/stream', (req, res) => {
   req.on('close', unsubscribe);
 });
 
-// Webhook for external alarm sources (sensors, home automation, scripts):
-// POST /api/events {"message": "...", "level": "info|warning|alarm", "source": "..."}
+// Webhook for external alarm sources (sensors, home automation, notification
+// forwarders relaying the Telus/Alarm.com app, scripts). Accepts:
+//   JSON:       {"message": "...", "level": "info|warning|alarm", "source": "..."}
+//   forwarder:  {"title": "...", "text": "...", "source": "..."}   (level auto-classified)
+//   plain text: the whole body is the message                       (level auto-classified)
 app.post('/api/events', (req, res) => {
-  const body = req.body ?? {};
-  const message = typeof body.message === 'string' ? body.message.trim() : '';
+  let message = '';
+  let level: EventLevel | null = null;
+  let source: string | undefined;
+  if (typeof req.body === 'string') {
+    message = req.body.trim();
+  } else {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    message =
+      typeof body.message === 'string' && body.message.trim() !== ''
+        ? body.message.trim()
+        : [body.title, body.text]
+            .filter((v): v is string => typeof v === 'string' && v.trim() !== '')
+            .map((v) => v.trim())
+            .join(' — ');
+    if (typeof body.level === 'string' && ['info', 'warning', 'alarm'].includes(body.level)) {
+      level = body.level as EventLevel;
+    }
+    if (typeof body.source === 'string' && body.source.trim() !== '') {
+      source = body.source.trim().slice(0, 100);
+    }
+  }
   if (message === '') {
-    res.status(400).json({ error: 'message is required' });
+    res.status(400).json({ error: 'message (or title/text, or a plain-text body) is required' });
     return;
   }
-  const level: EventLevel = ['info', 'warning', 'alarm'].includes(body.level)
-    ? body.level
-    : 'warning';
   const event = events.emit({
-    level,
+    level: level ?? classifyLevel(message),
     type: 'external',
     message: message.slice(0, 500),
-    source: typeof body.source === 'string' ? body.source.slice(0, 100) : undefined,
+    source,
   });
   res.status(201).json({ event });
 });
@@ -242,6 +295,7 @@ app.get('/api/cameras/:id/snapshot', (req, res) => {
 
 // Make sure ffmpeg children never outlive the server.
 function shutdown(): void {
+  mailBridge?.stop();
   for (const stream of streams.values()) stream.stop();
   process.exit(0);
 }
