@@ -4,7 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "rocialarm": "dist/cli.js"
+  },
   "scripts": {
+    "cli": "node dist/cli.js",
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",

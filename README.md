@@ -110,6 +110,28 @@ options:
 - **Optional password**: set `ALARM_DASH_PASSWORD` (and optionally `ALARM_DASH_USER`)
   to require HTTP Basic auth. `ALARM_DASH_PORT` / `ALARM_DASH_HOST` override the bind.
 
+### CLI (`rocialarm`)
+
+The dashboard ships with a command-line client that talks to it over the LAN — handy
+for scripts, cron jobs, SSH sessions, and wiring other systems in:
+
+```bash
+npx rocialarm status                      # armed state, cameras, latest events
+npx rocialarm arm                         # or: disarm
+npx rocialarm watch                       # live event tail (terminal bell on alarms)
+npx rocialarm events --limit 20
+npx rocialarm event "Back door opened" --level alarm --source door-sensor
+npx rocialarm cameras
+npx rocialarm add-camera --type usb --source /dev/video0 --name "Front door" --motion
+npx rocialarm snapshot <camera-id> --out frame.jpg
+```
+
+Point it at a remote dashboard with `--url http://192.168.1.10:4100` or
+`ROCIALARM_URL`; pass Basic-auth credentials with `--user`/`--password` or
+`ROCIALARM_USER`/`ROCIALARM_PASSWORD`. Read commands accept `--json` for scripting.
+(Run via `npx rocialarm` after `npm install && npm run build`, or
+`node alarm-dashboard/dist/cli.js`.)
+
 > **A note on Telus / Alarm.com cameras (e.g. ADC-V516):** these are Wi-Fi cloud
 > cameras — powered by a 12 V adapter, with **no USB video output** — and they stream
 > exclusively to the Alarm.com (Telus SmartHome) platform, which does not expose a
