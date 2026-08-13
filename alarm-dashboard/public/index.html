@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Rocimail Alarm Dashboard</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="alarm-banner" class="alarm-banner hidden">
+    <span id="alarm-banner-text">⚠ ALARM</span>
+    <button id="silence-btn">Silence</button>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">R</span>
+      <span class="brand-text">Alarm Dashboard</span>
+    </div>
+    <div class="topbar-actions">
+      <button id="arm-btn" class="arm-btn">…</button>
+      <button id="test-btn" class="btn">Test alarm</button>
+      <button id="add-camera-btn" class="btn">+ Add camera</button>
+      <button id="notify-btn" class="btn subtle" title="Enable desktop notifications">🔔 Notify</button>
+    </div>
+  </header>
+
+  <div id="ffmpeg-warning" class="ffmpeg-warning hidden">
+    ffmpeg was not found on the server — camera streaming is disabled. Install ffmpeg and restart.
+  </div>
+
+  <main class="layout">
+    <section id="camera-grid" class="camera-grid"></section>
+    <aside class="events-pane">
+      <div class="events-header">
+        <h2>Events</h2>
+        <div class="events-filters">
+          <button class="filter active" data-filter="all">All</button>
+          <button class="filter" data-filter="alarm">Alarms</button>
+          <button class="filter" data-filter="warning">Warnings</button>
+        </div>
+      </div>
+      <ul id="event-list" class="event-list"></ul>
+    </aside>
+  </main>
+
+  <div id="camera-modal" class="modal-backdrop hidden">
+    <form id="camera-form" class="modal">
+      <div class="modal-header">
+        <h3>Add camera</h3>
+        <button type="button" class="close-btn" id="camera-modal-close">×</button>
+      </div>
+      <label>Name
+        <input type="text" id="cam-name" maxlength="60" placeholder="Front door" />
+      </label>
+      <label>Type
+        <select id="cam-type">
+          <option value="usb">USB webcam (V4L2 device)</option>
+          <option value="rtsp">Network camera — RTSP</option>
+          <option value="mjpeg">Network camera — MJPEG over HTTP</option>
+          <option value="demo">Demo (synthetic test source)</option>
+        </select>
+      </label>
+      <label id="cam-source-label">Source
+        <input type="text" id="cam-source" placeholder="/dev/video0" />
+      </label>
+      <p class="hint" id="cam-hint"></p>
+      <label class="check"><input type="checkbox" id="cam-motion" checked /> Motion detection</label>
+      <div class="form-error hidden" id="cam-error"></div>
+      <div class="modal-footer">
+        <button type="submit" class="btn primary">Add camera</button>
+        <button type="button" class="btn" id="camera-modal-cancel">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

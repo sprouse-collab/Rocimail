@@ -5,15 +5,18 @@
   "description": "Zoho-Mail-style webmail client built on JMAP (Stalwart) with IMAP support for secondary accounts",
   "workspaces": [
     "server",
-    "web"
+    "web",
+    "alarm-dashboard"
   ],
   "scripts": {
     "dev": "npm run dev --workspace server & npm run dev --workspace web & wait",
     "dev:server": "npm run dev --workspace server",
     "dev:web": "npm run dev --workspace web",
-    "build": "npm run build --workspace server && npm run build --workspace web",
+    "dev:alarm": "npm run dev --workspace alarm-dashboard",
+    "build": "npm run build --workspace server && npm run build --workspace web && npm run build --workspace alarm-dashboard",
     "start": "npm run start --workspace server",
-    "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web"
+    "start:alarm": "npm run start --workspace alarm-dashboard",
+    "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web && npm run typecheck --workspace alarm-dashboard"
   },
   "engines": {
     "node": ">=18.17"

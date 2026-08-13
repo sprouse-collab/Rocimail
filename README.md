@@ -78,6 +78,45 @@ docker compose logs stalwart | grep -i password
 Then open the Stalwart admin UI at http://localhost:8080, create a mail account, and
 sign in to Rocimail with server URL `http://localhost:8080`.
 
+## Alarm dashboard (LAN)
+
+A separate LAN-facing web app (`alarm-dashboard/`) that shows **live camera feeds next
+to a real-time alarm/event feed** — arm/disarm, motion detection, a siren + desktop
+notification when an alarm fires, and a webhook so external sensors and scripts can
+raise alarms.
+
+```bash
+npm run dev:alarm      # dev server on http://0.0.0.0:4100
+npm run start:alarm    # production (after npm run build)
+```
+
+Open `http://<server-lan-ip>:4100` from any device on your network. Requirements and
+options:
+
+- **ffmpeg** must be installed on the machine running the dashboard
+  (`apt install ffmpeg` / `brew install ffmpeg`); it does all camera ingest.
+- **Camera sources** (add via “+ Add camera”, or edit `alarm-dashboard/config.json` —
+  see `config.example.json`):
+  - `usb` — any UVC webcam, by V4L2 device path (e.g. `/dev/video0`)
+  - `rtsp` — network cameras with an RTSP URL
+  - `mjpeg` — network cameras exposing MJPEG over HTTP
+  - `demo` — a synthetic moving test pattern (no hardware needed)
+- **Motion detection** (per camera) uses ffmpeg scene-change analysis inside the same
+  process as the live stream, so a USB device is never opened twice. Motion logs a
+  warning when disarmed and **rings an alarm when armed**.
+- **Webhook**: `POST /api/events` with `{"message": "Back door opened",
+  "level": "alarm", "source": "door-sensor"}` — lets alarm panels, home-automation
+  rules, or scripts feed the dashboard.
+- **Optional password**: set `ALARM_DASH_PASSWORD` (and optionally `ALARM_DASH_USER`)
+  to require HTTP Basic auth. `ALARM_DASH_PORT` / `ALARM_DASH_HOST` override the bind.
+
+> **A note on Telus / Alarm.com cameras (e.g. ADC-V516):** these are Wi-Fi cloud
+> cameras — powered by a 12 V adapter, with **no USB video output** — and they stream
+> exclusively to the Alarm.com (Telus SmartHome) platform, which does not expose a
+> local RTSP/ONVIF feed. They cannot be connected to this (or any) third-party
+> dashboard directly. To get video tiles here, use any UVC USB webcam or an
+> RTSP/MJPEG-capable IP camera; Alarm.com camera video stays in the Telus app/portal.
+
 ## API overview
 
 All endpoints are under `/api` and (except login) require `Authorization: Bearer <token>`.
