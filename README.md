@@ -19,6 +19,11 @@ your JMAP mailbox and any number of legacy IMAP mailboxes in one unified interfa
   account switcher in the composer's From field.
 - **Safe HTML rendering**: message bodies are sanitized with DOMPurify and rendered in
   a fully sandboxed iframe; inline `cid:` images are embedded as data URIs server-side.
+- **Alarm system**: attach a reminder to any message (“⏰ Remind me” in the reading
+  pane or message list) with quick presets or a custom time and an optional note.
+  A topbar bell tracks upcoming alarms; when one is due it rings on time with a
+  chime, a desktop notification, and a panel to open the message, snooze
+  (10 min / 1 h / tomorrow), or dismiss.
 
 ## Architecture
 
@@ -92,12 +97,19 @@ All endpoints are under `/api` and (except login) require `Authorization: Bearer
 | POST | `.../messages/delete` | Move to Trash (or expunge when already in Trash) |
 | GET | `.../messages/:msg/attachments/:att` | Download an attachment |
 | POST | `/accounts/:id/send` | Send mail (JMAP `EmailSubmission` or SMTP) |
+| GET | `/alarms` | List message alarms, sorted by due time |
+| POST | `/alarms` | Set an alarm on a message (replaces an existing one for that message) |
+| PATCH | `/alarms/:id` | Reschedule (snooze) an alarm or edit its note |
+| DELETE | `/alarms/:id` | Dismiss/cancel an alarm |
 
 ## Notes & limitations (v0.1)
 
 - Sessions and IMAP credentials live **in server memory only** — nothing is persisted
   to disk, and a server restart signs everyone out. Run the server over HTTPS in any
   real deployment.
+- Alarms live in the session (like accounts), so they last as long as you stay signed
+  in on that server and are lost with the session. Alarms ring in the browser while
+  Rocimail is open; desktop notifications require granting notification permission.
 - Compose is plain-text (rendered safely on the receiving side); rich-text editing,
   drafts autosave, and attachment upload are not implemented yet.
 - IMAP message lists page by mailbox sequence and search uses IMAP `SEARCH`

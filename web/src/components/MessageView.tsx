@@ -1,18 +1,20 @@
 import { useMemo } from 'react';
 import DOMPurify from 'dompurify';
 import { api, formatAddress } from '../api';
-import type { MailboxInfo, MessageDetail } from '../types';
+import type { Alarm, MailboxInfo, MessageDetail } from '../types';
 
 interface Props {
   accountId: string;
   message: MessageDetail | null;
   loading: boolean;
   mailboxes: MailboxInfo[];
+  alarm: Alarm | null;
   onReply: (mode: 'reply' | 'replyAll' | 'forward') => void;
   onDelete: () => void;
   onToggleSeen: () => void;
   onToggleFlag: () => void;
   onMove: (targetMailboxId: string) => void;
+  onSetAlarm: () => void;
 }
 
 function formatFullDate(iso: string): string {
@@ -44,11 +46,13 @@ export default function MessageView({
   message,
   loading,
   mailboxes,
+  alarm,
   onReply,
   onDelete,
   onToggleSeen,
   onToggleFlag,
   onMove,
+  onSetAlarm,
 }: Props) {
   const bodyDoc = useMemo(() => {
     if (!message) return '';
@@ -102,6 +106,13 @@ export default function MessageView({
         </button>
         <button className={`toolbar-btn ${message.flagged ? 'active' : ''}`} onClick={onToggleFlag}>
           🚩 {message.flagged ? 'Unflag' : 'Flag'}
+        </button>
+        <button
+          className={`toolbar-btn ${alarm ? 'active' : ''}`}
+          title={alarm ? `Alarm rings ${new Date(alarm.dueAt).toLocaleString()}` : 'Set an alarm for this message'}
+          onClick={onSetAlarm}
+        >
+          ⏰ {alarm ? 'Alarm set' : 'Remind me'}
         </button>
         <select
           className="move-select"
